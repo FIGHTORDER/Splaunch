@@ -85,6 +85,32 @@ fn home_dir() -> Option<PathBuf> {
 fn candidates() -> Vec<(PathBuf, String)> {
     let mut out: Vec<(PathBuf, String)> = Vec::new();
 
+    /* Shiro hands us the directory it manages, in `SHIRO_ZK_ROOT`, when it is
+       the one starting us. It is first because it is the only candidate that
+       was told to us rather than guessed at.
+
+       Without this the managed install was invisible: it lives under
+       `%APPDATA%\info.zero-k.shiro\zk`, which none of the guesses below look
+       at, so Splaunch launched from Shiro's own app list could not find the
+       only Zero-K on the machine. */
+    if let Ok(root) = std::env::var("SHIRO_ZK_ROOT") {
+        let root = root.trim();
+        if !root.is_empty() {
+            out.push((PathBuf::from(root), "Shiro".into()));
+        }
+    }
+
+    /* And the same directory by its own path, for a launch that did not come
+       through Shiro - a desktop shortcut, or the app started by hand. The
+       identifier is Shiro's bundle id; it is a literal here because Splaunch
+       does not otherwise know anything about Shiro. */
+    if let Ok(roaming) = std::env::var("APPDATA") {
+        out.push((
+            PathBuf::from(&roaming).join("info.zero-k.shiro").join("zk"),
+            "Shiro's managed install".into(),
+        ));
+    }
+
     // The standalone installer's default, and where our own NSIS package goes.
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
         out.push((
@@ -289,5 +315,59 @@ mod tests {
         std::fs::create_dir_all(tmp.join("pool")).unwrap();
         assert!(looks_like_zk_root(&tmp));
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /* Shiro launches Splaunch with SHIRO_ZK_ROOT set, and its managed install
+       lives somewhere none of the other guesses look. Both were missing, so
+       Splaunch started from Shiro's own app list could not see the only
+       Zero-K on the machine.
+
+       These three share a lock because the thing under test is a process-wide
+       environment variable and the test runner is threaded: without it they
+       clear each other's setup and fail in a way that depends on scheduling. */
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Run `f` with SHIRO_ZK_ROOT set to `value`, or unset when `None`.
+    fn with_handed_root<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let before = std::env::var("SHIRO_ZK_ROOT").ok();
+        // SAFETY: the lock above makes this the only thread touching it.
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var("SHIRO_ZK_ROOT", v),
+                None => std::env::remove_var("SHIRO_ZK_ROOT"),
+            }
+        }
+        let out = f();
+        unsafe {
+            match before {
+                Some(v) => std::env::set_var("SHIRO_ZK_ROOT", v),
+                None => std::env::remove_var("SHIRO_ZK_ROOT"),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_handed_root_is_probed_before_anything_guessed() {
+        let handed = r"C:\handed\zk";
+        let c = with_handed_root(Some(handed), candidates);
+        assert_eq!(c[0].0, PathBuf::from(handed));
+        assert_eq!(c[0].1, "Shiro");
+    }
+
+    #[test]
+    fn an_empty_handed_root_is_not_a_candidate() {
+        let c = with_handed_root(Some("   "), candidates);
+        assert!(c.iter().all(|(_, via)| via != "Shiro"),
+            "a blank variable must not become a candidate");
+    }
+
+    #[test]
+    fn the_managed_install_is_probed_even_without_the_variable() {
+        let c = with_handed_root(None, candidates);
+        assert!(c.iter().any(|(p, _)| p.ends_with("zk")
+            && p.to_string_lossy().contains("info.zero-k.shiro")),
+            "Shiro's managed directory should be looked at, not only handed over");
     }
 }
