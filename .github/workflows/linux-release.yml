@@ -1,0 +1,164 @@
+# Builds the Linux packages and publishes them to the `dev` release.
+#
+# Separate from release.yml because Tauri cannot cross-compile to Linux: the
+# build links against WebKitGTK and glibc headers that only exist on the
+# target, so these packages come from a Linux runner or not at all.
+#
+# This workflow only ever adds assets. It never edits the release title or
+# notes and never deletes an asset - release.yml owns those, and two workflows
+# rewriting the same release would undo each other on every push.
+#
+# NOTE: this app has never been run on Linux. A green build means it compiles
+# and packages, not that it works.
+name: Linux release
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "src-tauri/**"
+      - "index.html"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.js"
+      - ".github/workflows/linux-release.yml"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Tauri v2 on Linux needs the webview and tray libraries at build time.
+      # 22.04 carries webkit2gtk-4.1, which is what Tauri v2 wants; 20.04 only
+      # has 4.0 and will not link.
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            file
+
+      # Read out of release.yml rather than repeated here. Both workflows put
+      # assets on the same `dev` release, and two hand-bumped copies of the
+      # number would eventually disagree about what that release holds.
+      - name: Read the version
+        run: |
+          set -euo pipefail
+          v=$(sed -n 's/^[[:space:]]*SPLAUNCH_VERSION:[[:space:]]*//p' \
+            .github/workflows/release.yml | head -1 | tr -d '"\r')
+          test -n "$v"
+          echo "SPLAUNCH_VERSION=$v" >> "$GITHUB_ENV"
+          echo "Building $v"
+
+      # The package filenames come from tauri.conf.json, so the version has to
+      # be stamped there and not only used to name things afterwards.
+      - name: Stamp the version
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = "src-tauri/tauri.conf.json";
+            const c = JSON.parse(fs.readFileSync(p, "utf8"));
+            c.version = process.env.SPLAUNCH_VERSION;
+            fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
+          '
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Build the packages
+        run: npx tauri build --bundles deb,appimage
+
+      - name: Collect the packages
+        run: |
+          set -euo pipefail
+          mkdir -p linux
+          find src-tauri/target/release/bundle -type f \
+            \( -name '*.deb' -o -name '*.AppImage' \) -exec cp {} linux/ \;
+          cd linux
+          test -n "$(ls -1 *.deb 2>/dev/null)"
+          test -n "$(ls -1 *.AppImage 2>/dev/null)"
+          for f in *.deb *.AppImage; do
+            case "$f" in
+              *"$SPLAUNCH_VERSION"*) ;;
+              *) echo "::error::$f does not carry version $SPLAUNCH_VERSION"; exit 1 ;;
+            esac
+            sha256sum "$f" > "$f.sha256"
+          done
+          ls -l
+          cat *.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: splaunch-linux
+          path: linux/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd linux
+          mapfile -t assets < <(ls -1 *.deb *.AppImage *.sha256)
+          test "${#assets[@]}" -gt 0
+
+          # Nothing is deleted. Older versions are left in place for the same
+          # reason release.yml leaves them: Shiro's app launcher pins an exact
+          # asset URL and its hash, so removing one breaks every copy of Shiro
+          # already shipped. Uploading before anything is swept is also the
+          # order that stops a download being advertised and then 404ing; here
+          # there is simply no sweep to get wrong.
+          if gh release view dev >/dev/null 2>&1; then
+            gh release upload dev "${assets[@]}" --clobber
+          else
+            # Only reached if Linux publishes before Windows ever has. The
+            # title matches release.yml so the release does not get renamed
+            # underneath it on the next push.
+            notes=$(cat <<'EOF'
+          Rolling development build of Splaunch, from commit ${{ github.sha }}.
+
+          The .deb installs; the .AppImage runs from anywhere once it is marked
+          executable. Both are unsigned.
+
+          The .sha256 beside each file is the hash to check it against.
+          EOF
+            )
+            gh release create dev "${assets[@]}" \
+              --title "Splaunch - development build" \
+              --notes "$notes" \
+              --prerelease \
+              --target "${{ github.sha }}"
+          fi
+          echo "Published $SPLAUNCH_VERSION"
