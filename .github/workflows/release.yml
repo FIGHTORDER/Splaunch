@@ -1,0 +1,167 @@
+# Publishes a Windows build of the desktop app to the `dev` release.
+#
+# Splaunch has had no releases, which means there has been no way to hand
+# somebody a build: `cargo run` is the only route, and that needs a Rust
+# toolchain. This is the smallest thing that changes that.
+#
+# The `dev` tag is a rolling prerelease rather than a version: its assets are
+# replaced on every push to main, so the download URL is stable and always the
+# newest build. Cutting real versioned releases later means adding a tag
+# trigger, not rewriting this.
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "src-tauri/**"
+      - "index.html"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.js"
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # Only ever increases for this workflow, which is the property a "is this
+  # newer" check needs.
+  # Bumped by hand. `github.run_number` cannot be reset, and it counts runs of
+  # this workflow rather than releases of this app - so it neither starts where
+  # a version should nor stops where one would.
+  SPLAUNCH_VERSION: 1.0.0
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # The version lives in tauri.conf.json, so stamp it there too. Naming only
+      # the zip after the build number leaves an installer inside that reports a
+      # different version than the file it arrived in.
+      - name: Stamp the version
+        shell: pwsh
+        run: |
+          $conf = "src-tauri/tauri.conf.json"
+          $json = Get-Content $conf -Raw | ConvertFrom-Json
+          $json.version = $env:SPLAUNCH_VERSION
+          $json | ConvertTo-Json -Depth 32 | Set-Content $conf -Encoding utf8
+          "Building $env:SPLAUNCH_VERSION"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `tauri build`, not `cargo build`: the packaging step below wants the NSIS
+      # installer and only the bundler produces one. The bare cargo invocation
+      # also could not find Cargo.toml, which lives in src-tauri rather than at
+      # the repository root.
+      - name: Build the desktop app
+        run: npx tauri build --bundles nsis
+
+      # A zip of the portable executable, not of the installer. Shiro's launcher
+      # unpacks this and runs what is inside, so what is inside has to be the
+      # program - an installer would install rather than launch. The NSIS
+      # installer is published beside it for people who want one.
+      #
+      # The staging directory is deliberately not called "dist": that is where
+      # Vite writes the frontend, and the previous version of this step zipped
+      # the whole web build up with the installer by accident.
+      - name: Package
+        shell: pwsh
+        run: |
+          $stage = "package"
+          Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $stage | Out-Null
+
+          # Tauri names the binary after the crate; the launcher expects the
+          # product name, so it is renamed on the way in rather than the
+          # catalogue having to know about Cargo.
+          $built = "src-tauri/target/release/splaunch.exe"
+          if (-not (Test-Path $built)) { throw "no executable at $built" }
+          Copy-Item $built (Join-Path $stage "Splaunch.exe")
+
+          if (Test-Path "LICENSE") { Copy-Item "LICENSE" $stage }
+          if (Test-Path "README.md") { Copy-Item "README.md" $stage }
+
+          $zip = "Splaunch_${env:SPLAUNCH_VERSION}_x64.zip"
+          Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
+
+          # The hash is published beside the zip because whoever installs this
+          # should be able to check it without trusting the download - Shiro's
+          # app launcher pins exactly this value and refuses a mismatch.
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zip" | Set-Content "$zip.sha256" -Encoding utf8
+          "SPLAUNCH_ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          $setup = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
+          if ($setup) {
+            Copy-Item $setup.FullName "."
+            "SPLAUNCH_SETUP=$($setup.Name)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+          "sha256: $hash"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: splaunch-windows
+          path: |
+            Splaunch_*.zip
+            Splaunch_*.zip.sha256
+            Splaunch_*-setup.exe
+          if-no-files-found: error
+
+      # Updated in place rather than deleted and recreated: a delete that fails
+      # leaves a create that cannot succeed, and there is never a moment when
+      # the download link people have does not exist.
+      - name: Publish
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = @($env:SPLAUNCH_ZIP, "$($env:SPLAUNCH_ZIP).sha256")
+          if ($env:SPLAUNCH_SETUP) { $assets += $env:SPLAUNCH_SETUP }
+          $notes = @"
+          Rolling development build of Splaunch, from commit ${{ github.sha }}.
+
+          The zip holds a portable Splaunch.exe - unpack it anywhere and run it. The
+          setup .exe beside it installs instead, if you would rather.
+          Both are unsigned, so Windows SmartScreen will warn about an unknown
+          publisher.
+
+          The .sha256 beside the zip is the hash to check it against.
+          "@
+
+          gh release view dev *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release edit dev --title "Splaunch - development build" --notes $notes --prerelease
+            if ($LASTEXITCODE -ne 0) { throw "could not update the dev release" }
+
+            # Older versions are deliberately left in place. Shiro's app
+            # launcher pins an exact URL and its hash, so deleting the asset it
+            # points at would break every copy of Shiro already shipped. Assets
+            # here are immutable once published; the newest is simply the one
+            # with the highest version.
+            gh release upload dev $assets --clobber
+            if ($LASTEXITCODE -ne 0) { throw "could not upload the assets" }
+          } else {
+            gh release create dev $assets `
+              --title "Splaunch - development build" `
+              --notes $notes `
+              --prerelease `
+              --target ${{ github.sha }}
+            if ($LASTEXITCODE -ne 0) { throw "could not create the dev release" }
+          }
+          "Published $env:SPLAUNCH_VERSION"

@@ -1,0 +1,53 @@
+# Runs the tests on every push and pull request.
+#
+# The release workflow builds an installer but never runs a test, so a change
+# that compiles and is wrong has been reaching the `dev` release unchallenged.
+# This is the check that should fail first.
+#
+# Windows rather than Linux because that is what the app targets, and because a
+# Tauri build on Linux needs a webkit2gtk stack this does not otherwise want.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The frontend first: it is seconds, and a broken build here would only
+      # be found at bundling time otherwise.
+      - name: Build the frontend
+        run: npm run build
+
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Lint
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings

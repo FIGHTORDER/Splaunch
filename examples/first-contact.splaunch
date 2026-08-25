@@ -1,0 +1,199 @@
+{
+  "formatVersion": 1,
+  "name": "First Contact",
+  "map": "Comet Catcher Redux",
+  "game": "",
+  "mapElmos": 6144,
+  "teams": [
+    {
+      "id": 0,
+      "ally": 0,
+      "ai": null,
+      "colour": "0 0 1"
+    },
+    {
+      "id": 1,
+      "ally": 1,
+      "ai": "NullAI",
+      "colour": "1 0 0"
+    }
+  ],
+  "units": [
+    {
+      "unit": "armcom1",
+      "team": 0,
+      "x": 1100,
+      "z": 4900
+    },
+    {
+      "unit": "cloakraid",
+      "team": 0,
+      "x": 1320,
+      "z": 4780
+    },
+    {
+      "unit": "cloakraid",
+      "team": 0,
+      "x": 1420,
+      "z": 4880
+    },
+    {
+      "unit": "cloakraid",
+      "team": 0,
+      "x": 1220,
+      "z": 5010
+    },
+    {
+      "unit": "energysolar",
+      "team": 0,
+      "x": 950,
+      "z": 5080,
+      "facing": 0
+    },
+    {
+      "unit": "staticmex",
+      "team": 0,
+      "x": 1500,
+      "z": 5100
+    },
+    {
+      "unit": "corcom1",
+      "team": 1,
+      "x": 4950,
+      "z": 1150,
+      "facing": 2
+    },
+    {
+      "unit": "turretlaser",
+      "team": 1,
+      "x": 4620,
+      "z": 1420,
+      "facing": 2
+    },
+    {
+      "unit": "turretlaser",
+      "team": 1,
+      "x": 5180,
+      "z": 1440,
+      "facing": 2,
+      "difficultyAtLeast": 3
+    },
+    {
+      "unit": "cloakraid",
+      "team": 1,
+      "x": 4780,
+      "z": 1620,
+      "patrol": [
+        [
+          4780,
+          1620
+        ],
+        [
+          3900,
+          2400
+        ],
+        [
+          4780,
+          1620
+        ]
+      ]
+    },
+    {
+      "unit": "cloakraid",
+      "team": 1,
+      "x": 5060,
+      "z": 1650,
+      "selfPatrol": true
+    },
+    {
+      "unit": "energysolar",
+      "team": 1,
+      "x": 5250,
+      "z": 1050,
+      "facing": 0
+    }
+  ],
+  "features": [
+    {
+      "name": "cloakraid_dead",
+      "x": 3050,
+      "z": 3100,
+      "facing": 1
+    },
+    {
+      "name": "cloakraid_dead",
+      "x": 3180,
+      "z": 3020,
+      "facing": 3
+    },
+    {
+      "name": "energysolar_dead",
+      "x": 2950,
+      "z": 3250,
+      "facing": 0
+    }
+  ],
+  "goals": [
+    {
+      "description": "Destroy the enemy commander.",
+      "goal": {
+        "kind": "destroyAllBy",
+        "unit": "corcom1",
+        "seconds": 900
+      }
+    },
+    {
+      "description": "Keep your own commander alive.",
+      "goal": {
+        "kind": "surviveUntil",
+        "seconds": 900,
+        "units": [
+          "armcom1"
+        ]
+      }
+    },
+    {
+      "description": "Bonus: kill two of their Glaives.",
+      "goal": {
+        "kind": "killCount",
+        "unit": "cloakraid",
+        "count": 2
+      }
+    }
+  ],
+  "objectives": [
+    "Their outpost is north-east, behind a Lotus turret.",
+    "The wrecks in the middle of the map can be reclaimed for metal.",
+    "One of their Glaives patrols away from the outpost. Time it."
+  ],
+  "briefing": "A scouting party went north-east and did not come back.\n\nWhat is out there is small - a commander, two Glaives and a Lotus turret around a solar collector. Small is not nothing: walk your own commander into that turret and this is a short mission. One of their Glaives walks a beat towards the middle of the map, so the approach is not always watched.\n\nYou have three Glaives, a solar collector and a metal extractor. There are wrecks in the middle worth reclaiming on the way through.\n\nKill their commander. Keep yours.\n\nOn Hard there is a second turret.",
+  "defeat": [
+    {
+      "ally": 0,
+      "vitalUnits": [
+        "armcom1"
+      ],
+      "loseAfterSeconds": null
+    },
+    {
+      "ally": 1,
+      "vitalUnits": [
+        "corcom1"
+      ],
+      "loseAfterSeconds": null
+    }
+  ],
+  "markers": [
+    {
+      "x": 4950,
+      "z": 1150,
+      "text": "Their commander"
+    },
+    {
+      "x": 3060,
+      "z": 3120,
+      "text": "Wrecks - reclaim these"
+    }
+  ],
+  "difficulty": 2
+}

@@ -1,0 +1,29 @@
+[package]
+name = "splaunch"
+version = "1.0.0"
+edition = "2021"
+description = "Splaunch - a scenario editor for Zero-K"
+rust-version = "1.77"
+
+[lib]
+name = "splaunch_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# Opening a link in the real browser. A bare <a href> does nothing in a webview.
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Zero-K's own content service, for the map catalogue. Blocking because there is
+# one call and nothing to overlap it with; rustls rather than native TLS so a
+# Linux build does not need OpenSSL.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+zip = { version = "4.2.0", default-features = false, features = ["deflate"] }
+tauri-plugin-dialog = "2.0.0-rc.8"
+
+[profile.release]
+strip = true

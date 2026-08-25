@@ -1,0 +1,12 @@
+# Keep text files LF in the working tree on every platform, so a file written
+# on Windows is byte-identical to the same file written on Linux.
+* text=auto eol=lf
+
+*.png    binary
+*.jpg    binary
+*.ico    binary
+*.icns   binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.otf    binary
