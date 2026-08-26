@@ -124,7 +124,6 @@ export default function Selection({
         }))} />
 
       <Checkbox label="Neutral (owned by Gaia)" checked={!!selected.neutral}
-        hint="Scenery that shoots back, or a prize sitting between two players."
         onChange={e => onPatch({ neutral: e.target.checked })} />
 
       <div style={{ display: "grid", gridTemplateColumns: "auto 1fr",
@@ -154,11 +153,9 @@ export default function Selection({
         onChange={e => onPatch({ experience: num(e.target.value) })} />
 
       <Checkbox label="Invincible" checked={!!selected.invincible}
-        hint="For the thing the scenario is about."
         onChange={e => onPatch({ invincible: e.target.checked ? true : null })} />
 
       <Checkbox label="Flatten the ground under it" checked={selected.terraformHeight != null}
-        hint="So a building on a slope still sits flat."
         onChange={e => onPatch({ terraformHeight: e.target.checked ? 0 : null })} />
 
       {/* The closest the modern mission system comes to scripted behaviour.

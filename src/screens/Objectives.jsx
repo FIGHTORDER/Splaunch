@@ -115,9 +115,6 @@ function GoalFields({ goal, onChange, roster }) {
               <TimeField label="By" value={goal.seconds} onChange={s => set({ seconds: s })} />
             </div>
           </div>
-          <span style={hint}>
-            Counts everything you finished, including units that died afterwards.
-          </span>
         </div>
       );
     case "haveAtOnce":
@@ -125,9 +122,6 @@ function GoalFields({ goal, onChange, roster }) {
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
           <UnitPicker label="Unit" roster={roster} value={goal.unit} onChange={u => set({ unit: u })} />
           <CountField label="How many at once" value={goal.count} onChange={c => set({ count: c })} />
-          <span style={hint}>
-            Unlike "build", losses are not forgiven - you need them alive together.
-          </span>
         </div>
       );
     case "destroyAllBy":
