@@ -1,3 +1,4 @@
+mod campaign;
 mod customkey;
 mod game;
 mod install;
@@ -23,6 +24,7 @@ pub fn run() {
             scenario::spsc_save,
             scenario::spsc_open,
             scenario::spsc_example,
+            campaign::spsc_export_campaign,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Splaunch");

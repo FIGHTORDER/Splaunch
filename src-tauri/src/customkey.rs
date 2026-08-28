@@ -207,12 +207,22 @@ pub fn encode(table: &Table) -> String {
     base64_encode(to_lua(table).as_bytes())
 }
 
-#[cfg(test)]
 /// Zero-K's Base64Decode *including* the `_` -> `=` substitution that
 /// `CustomKeyToUsefulTable` applies first: this is what the game actually
-/// runs, faults and all. Test-only, because shipping code should never
-/// depend on the broken path - it exists so we can prove our output
+/// runs, faults and all.
+///
+/// Nothing here decodes its own output to work out what it means, and nothing
+/// should: this is the broken path, and depending on it for behaviour would be
+/// building on the fault rather than around it. It exists to prove our output
 /// survives it.
+///
+/// It was `#[cfg(test)]` for that reason, and is no longer, because packing a
+/// campaign proves the same thing for the same reason and it is not a test.
+/// A campaign is compiled once and run by everybody who downloads it, so a
+/// payload that does not survive is not one machine's bad luck - it is a
+/// mission that starts on an empty map for all of them, with nothing in the
+/// log to say why. `campaign::mission_template` refuses rather than shipping
+/// one.
 pub(crate) fn decode_as_the_game_does(encoded: &str) -> Vec<u8> {
     let swapped: Vec<u8> = encoded
         .bytes()

@@ -38,7 +38,8 @@ pub struct Placed {
     /// Map position in elmos.
     pub x: f32,
     pub z: f32,
-    /// 0-3, quarter turns. Random if absent.
+    /// 0-3, quarter turns. Absent is written as 0 rather than left out, which
+    /// is not the same thing: the gadget cannot place a unit without one.
     #[serde(default)]
     pub facing: Option<u32>,
     /// 0.0 to 1.0. A half-built factory is a scenario premise all by itself.
@@ -110,7 +111,7 @@ pub struct Feature {
     pub name: String,
     pub x: f32,
     pub z: f32,
-    /// 0-3. Random if absent, which is what Zero-K does for scenery.
+    /// 0-3, written as 0 when absent for the same reason as a unit's.
     #[serde(default)]
     pub facing: Option<u32>,
 }
@@ -428,9 +429,10 @@ pub fn mission_modoptions(s: &Scenario) -> Vec<(String, String)> {
             entry.set("name", ck::s(&feature.name));
             entry.set("x", ck::n(feature.x as f64));
             entry.set("z", ck::n(feature.z as f64));
-            if let Some(facing) = feature.facing {
-                entry.set("facing", ck::n(facing));
-            }
+            // As above, and one step worse: the gadget computes
+            // `facing * FACING_TO_HEADING`, so an absent one is arithmetic on
+            // nil rather than a rejected argument.
+            entry.set("facing", ck::n(feature.facing.unwrap_or(0)));
             list.push(ck::t(entry));
         }
         out.push(("featurestospawn".into(), customkey::encode(&list)));
@@ -505,12 +507,16 @@ fn placed_fields(unit: &Placed) -> Table {
     entry.set("name", ck::s(&unit.unit));
     entry.set("x", ck::n(unit.x as f64));
     entry.set("z", ck::n(unit.z as f64));
-    // Each of these is written only when set. The gadget branches on the field
+    /* Facing is always written, and it is the exception to the rule below.
+       The gadget hands it straight to `Spring.CreateUnit` as a positional
+       argument, so leaving it out is not "let the game choose": it is
+       `CreateUnit(): bad facing parameter`, and the call that raises it is the
+       one placing every unit in the scenario. Measured on a real engine, where
+       the shipped example placed nothing at all for this reason. */
+    entry.set("facing", ck::n(unit.facing.unwrap_or(0)));
+    // The rest are written only when set. The gadget branches on the field
     // being present, so a defaulted zero is a different instruction from
     // silence - `buildProgress = 0` is an unbuilt husk, not a finished unit.
-    if let Some(facing) = unit.facing {
-        entry.set("facing", ck::n(facing));
-    }
     if let Some(progress) = unit.build_progress {
         entry.set("buildProgress", ck::n(progress as f64));
     }
@@ -880,7 +886,10 @@ mod tests {
     fn optional_unit_fields_are_omitted_rather_than_defaulted() {
         /* The gadget branches on a field being present. `buildProgress = 0` is
            an unbuilt husk, not a finished unit, so writing a default would
-           change what spawns. */
+           change what spawns.
+
+           Facing is the exception and is always present: it is a positional
+           argument to `CreateUnit` rather than a field the gadget tests for. */
         let plain = to_lua(&placed_fields(&Placed {
             unit: "cloakraid".into(),
             team: 0,
@@ -888,7 +897,7 @@ mod tests {
             z: 2.0,
             ..Default::default()
         }));
-        assert_eq!(plain, "{name=\"cloakraid\",x=1,z=2,}");
+        assert_eq!(plain, "{name=\"cloakraid\",x=1,z=2,facing=0,}");
 
         let dressed = to_lua(&placed_fields(&Placed {
             unit: "armcom1".into(),
@@ -1017,6 +1026,91 @@ mod tests {
     /// The scenario shipped in `examples/`, which is the one thing here that a
     /// person is invited to open and play.
     const EXAMPLE: &str = include_str!("../../examples/first-contact.splaunch");
+
+    /// The shipped example, compiled against a real install and written out.
+    ///
+    /// Every other test here compiles against fixtures, which is why they all
+    /// passed while `GameType` was naming a racing mod and `Mapname` was a
+    /// string the engine has never indexed. This one asks the machine.
+    ///
+    /// Ignored, because CI has no Zero-K:
+    ///
+    /// ```text
+    /// SPLAUNCH_TEST_ZK_ROOT=... SPLAUNCH_TEST_SCRIPT=out.txt \
+    ///   cargo test --lib -- --ignored --nocapture
+    /// ```
+    ///
+    /// `SPLAUNCH_TEST_MAP` overrides the example's map, for a machine that has
+    /// Zero-K but not that one.
+    #[test]
+    #[ignore = "needs a Zero-K install in SPLAUNCH_TEST_ZK_ROOT"]
+    fn the_shipped_example_compiles_against_a_real_install() {
+        let root = std::path::PathBuf::from(
+            std::env::var("SPLAUNCH_TEST_ZK_ROOT")
+                .expect("set SPLAUNCH_TEST_ZK_ROOT to a Zero-K data directory"),
+        );
+        let mut s = from_json(include_str!("../../examples/first-contact.splaunch"))
+            .expect("the shipped example does not parse");
+
+        s.game = crate::game::base_game(&root).expect("no game in that install").name;
+        assert!(
+            s.game.to_ascii_lowercase().starts_with("zero-k"),
+            "the game to launch came out as {:?}",
+            s.game
+        );
+
+        if let Ok(map) = std::env::var("SPLAUNCH_TEST_MAP") {
+            s.map = map;
+        }
+        let installed = crate::game::installed_maps(&root);
+        s.map = crate::game::resolve_map(&installed, &s.map).unwrap_or_else(|| {
+            panic!("the map {:?} is not installed. Installed: {installed:?}", s.map)
+        });
+
+        let problems = problems(&s);
+        assert!(problems.is_empty(), "{problems:#?}");
+
+        let script = write_script(&s, "Tester").expect("the example does not compile");
+        for line in script.lines() {
+            let line = line.trim();
+            if line.starts_with("Mapname") || line.starts_with("GameType") {
+                println!("{line}");
+            }
+        }
+        if let Ok(path) = std::env::var("SPLAUNCH_TEST_SCRIPT") {
+            std::fs::write(&path, &script).expect("could not write the script");
+            println!("wrote {path} ({} bytes)", script.len());
+        }
+    }
+
+    #[test]
+    fn a_unit_with_no_facing_still_reaches_the_game_with_one() {
+        /* Measured against a real engine. Without this the campaign gadget
+           raises `CreateUnit(): bad facing parameter` on the first unit and the
+           scenario runs on an empty map, with nothing in the log to say that
+           the units were the thing that failed. */
+        let mut sc = sample();
+        sc.units[0].facing = None;
+        let script = write_script(&sc, "Qrow").unwrap();
+        let team0 = script.split("[TEAM0]").nth(1).unwrap();
+        let value = value_of(team0, "extrastartunits_1").expect("no units on team 0");
+        let placed = String::from_utf8(decode_as_the_game_does(&value)).unwrap();
+        assert!(placed.contains("facing=0"), "{placed}");
+    }
+
+    #[test]
+    fn a_feature_with_no_facing_still_reaches_the_game_with_one() {
+        let mut sc = sample();
+        sc.features = vec![Feature {
+            name: "cloakraid_dead".into(),
+            x: 100.0,
+            z: 200.0,
+            facing: None,
+        }];
+        let script = write_script(&sc, "Qrow").unwrap();
+        let spawned = modoption_lua(&script, "featurestospawn");
+        assert!(spawned.contains("facing=0"), "{spawned}");
+    }
 
     #[test]
     fn the_shipped_example_compiles_to_a_script() {
@@ -1515,10 +1609,26 @@ pub fn spsc_open(app: tauri::AppHandle) -> Result<Option<Scenario>, String> {
 pub fn spsc_test(
     app: tauri::AppHandle,
     game: tauri::State<'_, crate::launch::Game>,
-    scenario: Scenario,
+    mut scenario: Scenario,
     player: String,
     engine: String,
 ) -> Result<u32, String> {
+    /* `Mapname` has to be the archive's own name, and a scenario carries the
+       one its author typed. Those differ more often than not, because the
+       archive carries a version the author had no reason to write down:
+       "Comet Catcher Redux" against "Comet Catcher Redux v3.1". Left alone the
+       engine stops with an error about a missing map, which reads like the map
+       is not installed when it is.
+
+       Only a name that resolves is replaced. One that does not is passed
+       through as written, so the engine's own error is what the author sees
+       rather than a guess of ours. */
+    if let Some(root) = game.install_root() {
+        let installed = crate::game::installed_maps(&root);
+        if let Some(exact) = crate::game::resolve_map(&installed, &scenario.map) {
+            scenario.map = exact;
+        }
+    }
     let script = write_script(&scenario, &player)?;
     let script_path = script_path();
     if let Some(dir) = script_path.parent() {

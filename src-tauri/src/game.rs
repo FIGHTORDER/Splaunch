@@ -159,6 +159,37 @@ fn lua_field(source: &str, key: &str) -> Option<String> {
     None
 }
 
+/// Pull a numeric `key = value` out of a Lua table body.
+///
+/// `modtype` is the field that says whether an archive is a game or a map, and
+/// the one field read here that the engine writes unquoted. Older caches quote
+/// it, so both forms are accepted.
+fn lua_number(source: &str, key: &str) -> Option<i64> {
+    let lowered = source.to_ascii_lowercase();
+    let needle = key.to_ascii_lowercase();
+    let mut at = 0;
+    while let Some(i) = lowered[at..].find(&needle) {
+        let start = at + i;
+        at = start + needle.len();
+        let before = lowered[..start].chars().next_back();
+        if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        let after = source[at..].trim_start();
+        let Some(after) = after.strip_prefix('=') else { continue };
+        let after = after.trim_start();
+        let after = after.strip_prefix('"').unwrap_or(after);
+        let digits: String = after
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '-')
+            .collect();
+        if let Ok(n) = digits.parse() {
+            return Some(n);
+        }
+    }
+    None
+}
+
 /// The name the engine indexes an archive under.
 ///
 /// Spring appends the declared version to the declared name unless the name
@@ -194,28 +225,172 @@ fn read_from_archive(path: &Path, wanted: &str) -> Option<String> {
     Some(out)
 }
 
+/// What the engine recorded about one archive.
+#[derive(Debug)]
+struct Cached {
+    file: String,
+    name: String,
+    modtype: i64,
+}
+
+/// The closing brace matching the one at `open`, ignoring braces in strings.
+///
+/// Counting braces alone is not safe: a `description` is free text from whoever
+/// packaged the archive, and one containing a brace would end the entry early
+/// and take the rest of the file with it. Long-bracket strings hold Windows
+/// paths and need the same skip.
+fn block_end(s: &str, open: usize) -> Option<usize> {
+    let b = s.as_bytes();
+    if b.get(open) != Some(&b'{') {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut i = open;
+    while i < b.len() {
+        match b[i] {
+            b'"' => {
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'[' if b.get(i + 1) == Some(&b'[') => {
+                i += 2;
+                while i + 1 < b.len() && !(b[i] == b']' && b[i + 1] == b']') {
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Split one `ArchiveCache` into entries.
+fn read_cache(text: &str, out: &mut Vec<Cached>) {
+    let Some(list) = text.find("archives") else { return };
+    let Some(open) = text[list..].find('{').map(|i| list + i) else { return };
+    let Some(close) = block_end(text, open) else { return };
+    let mut at = open + 1;
+    while at < close {
+        let Some(start) = text[at..close].find('{').map(|i| at + i) else { break };
+        let Some(end) = block_end(text, start) else { break };
+        let block = &text[start..=end];
+        at = end + 1;
+        let Some(data_at) = block
+            .find("archivedata")
+            .and_then(|i| block[i..].find('{').map(|j| i + j))
+        else {
+            continue;
+        };
+        let Some(data_end) = block_end(block, data_at) else { continue };
+        let data = &block[data_at..=data_end];
+        // The outer name is the file; the inner one is what the engine indexes
+        // it under, which is the string a start script has to carry.
+        let (Some(file), Some(name)) =
+            (lua_field(&block[..data_at], "name"), lua_field(data, "name"))
+        else {
+            continue;
+        };
+        out.push(Cached {
+            file,
+            name,
+            modtype: lua_number(data, "modtype").unwrap_or(-1),
+        });
+    }
+}
+
+/// Every archive the engine has indexed on this machine.
+///
+/// `games/` is only half the picture, and the missing half is the important
+/// one. A rapid install, which is what both Zero-K's own installer and Shiro
+/// produce, keeps the game itself as a `.sdp` in `packages/` whose contents
+/// live in the pool. Scanning `games/` there finds every mod on the machine
+/// except the game they are mods for, so `base_game` fell through to whatever
+/// sorted first and the scenario compiled to a script naming a `GameType` that
+/// was not Zero-K. On the machine this was found on, that was a racing mod.
+///
+/// The engine writes `cache/ArchiveCache<N>.lua` whenever it scans, and its
+/// `name` is already the exact string `GameType` wants, for `.sd7` archives
+/// this cannot open as well as for `.sdz`. `modtype` sorts them: 1 is a game,
+/// 3 a map, 0 a mission mutator hidden from the mod list.
+fn cached_archives(root: &Path) -> Vec<Cached> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root.join("cache")) else { return out };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|f| f.to_str())
+                .is_some_and(|f| f.starts_with("ArchiveCache") && f.ends_with(".lua"))
+        })
+        .collect();
+    files.sort();
+    for path in files {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            read_cache(&text, &mut out);
+        }
+    }
+    out
+}
+
 /// Every game archive in the install, with the name `GameType` needs.
 ///
-/// `.sd7` archives are skipped rather than mis-reported: they are 7-zip, this
-/// reads zip, and offering a name we could not actually read would produce a
-/// script that fails at the whistle. A Steam install ships `zk-stable.sdz`,
-/// which is the case that matters.
+/// The engine's index first, because it is the only source that can see a rapid
+/// package. The `games/` directory after it, for an install whose engine has
+/// never run and so has written no cache yet.
+///
+/// `.sd7` archives are skipped by the directory scan rather than mis-reported:
+/// they are 7-zip, this reads zip, and offering a name we could not actually
+/// read would produce a script that fails at the whistle. The index carries no
+/// such limit, having been written by the engine that did read them.
 pub fn game_archives(root: &Path) -> Vec<GameArchive> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(root.join("games")) else { return out };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !matches!(path.extension(), Some(e) if e.eq_ignore_ascii_case("sdz")) {
+    let mut out: Vec<GameArchive> = Vec::new();
+    for c in cached_archives(root) {
+        // 3 is a map. 0 is a mission mutator, which is still a launchable game.
+        if c.modtype != 1 && c.modtype != 0 {
             continue;
         }
-        let Some(modinfo) = read_from_archive(&path, "modinfo.lua") else { continue };
-        if let Some(name) = archive_name(&modinfo) {
-            out.push(GameArchive { name, path });
+        /* The cache records an absolute path, which is wrong the moment an
+           install is moved, so the file is looked for under this root instead.
+           That also drops entries the engine indexed and somebody has since
+           deleted, which is the direction that matters: a name we cannot back
+           with a file compiles into a script that fails at the whistle. */
+        let Some(path) = ["packages", "games"]
+            .iter()
+            .map(|d| root.join(d).join(&c.file))
+            .find(|p| p.exists())
+        else {
+            continue;
+        };
+        out.push(GameArchive { name: c.name, path });
+    }
+    if let Ok(entries) = std::fs::read_dir(root.join("games")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !matches!(path.extension(), Some(e) if e.eq_ignore_ascii_case("sdz")) {
+                continue;
+            }
+            let Some(modinfo) = read_from_archive(&path, "modinfo.lua") else { continue };
+            if let Some(name) = archive_name(&modinfo) {
+                out.push(GameArchive { name, path });
+            }
         }
     }
     // The base game before its mutators: a mission mutator declares `modtype 0`
     // and is not what somebody building a scenario means by "the game".
     out.sort_by(|a, b| a.name.cmp(&b.name));
+    out.dedup_by(|a, b| a.name == b.name);
     out
 }
 
@@ -244,12 +419,24 @@ pub fn base_game(root: &Path) -> Option<GameArchive> {
 /// the archive, which is a poor way to learn that you needed to play the map
 /// once first.
 ///
-/// The name is the filename without its extension, which is what Spring indexes
-/// a map archive under when its own metadata is unreadable, and what the
-/// catalogue's names correspond to once underscores are spaces.
+/// Filenames are kept alongside, without their extension, because a map
+/// downloaded since the engine last scanned is in `maps/` and not yet in the
+/// index. That is the safe direction: at worst a name matches twice.
 pub fn installed_maps(root: &Path) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let Ok(entries) = std::fs::read_dir(root.join("maps")) else { return out };
+    /* The engine's index first, because it holds the name the engine actually
+       indexes the map under, and a start script has to carry that exactly.
+       `icy_crater_v4.sd7` is "Icy Crater v4" inside, and no amount of
+       normalising a filename recovers those spaces. */
+    let mut out: Vec<String> = cached_archives(root)
+        .into_iter()
+        .filter(|c| c.modtype == 3 && root.join("maps").join(&c.file).exists())
+        .map(|c| c.name)
+        .collect();
+    let Ok(entries) = std::fs::read_dir(root.join("maps")) else {
+        out.sort();
+        out.dedup();
+        return out;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         let is_map = matches!(path.extension().and_then(|e| e.to_str()), Some(e)
@@ -268,14 +455,46 @@ pub fn installed_maps(root: &Path) -> Vec<String> {
     out
 }
 
-/// Whether a catalogue name matches an installed archive.
+fn normal(s: &str) -> String {
+    s.to_ascii_lowercase().replace([' ', '_', '-', '.'], "")
+}
+
+/// The installed archive a scenario's map name refers to, named as the engine
+/// names it.
 ///
-/// The catalogue says "Comet Catcher Redux" and the file on disk is
-/// `comet_catcher_redux.sd7`, so neither case nor the spaces can be trusted.
-pub fn map_is_installed(installed: &[String], name: &str) -> bool {
-    let normal = |s: &str| s.to_ascii_lowercase().replace([' ', '_', '-'], "");
+/// Two things stand between the two strings. The catalogue says "Comet Catcher
+/// Redux" and the file on disk is `comet_catcher_redux.sd7`, so neither case
+/// nor the spaces can be trusted. And a scenario carries whatever its author
+/// typed, which is often the map without the version the archive carries:
+/// "Comet Catcher Redux" against "Comet Catcher Redux v3.1".
+///
+/// `Mapname` in a start script has to be the archive's own name or the engine
+/// stops with an error about the map, so the near miss is corrected here rather
+/// than becoming a failed launch.
+///
+/// A prefix only counts when exactly one archive matches it. Two versions of
+/// the same map installed side by side is a real situation, and starting the
+/// wrong one silently is worse than saying so.
+pub fn resolve_map(installed: &[String], name: &str) -> Option<String> {
     let wanted = normal(name);
-    installed.iter().any(|m| normal(m) == wanted)
+    if wanted.is_empty() {
+        return None;
+    }
+    if let Some(exact) = installed.iter().find(|m| normal(m) == wanted) {
+        return Some(exact.clone());
+    }
+    let mut near = installed.iter().filter(|m| normal(m).starts_with(&wanted));
+    let first = near.next()?;
+    // Two archives answer to this name, so neither of them is the answer.
+    if near.next().is_some() {
+        return None;
+    }
+    Some(first.clone())
+}
+
+/// Whether a catalogue name matches an installed archive.
+pub fn map_is_installed(installed: &[String], name: &str) -> bool {
+    resolve_map(installed, name).is_some()
 }
 
 // ------------------------------------------------------------------ AIs -----
@@ -534,6 +753,183 @@ pub fn game_info(root: &Path) -> GameInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Three entries verbatim from a real `ArchiveCache20.lua`, trimmed: the
+    /// game as a rapid package, a map, and a mission mutator. The description
+    /// carries a brace it does not have in life, because that is the input that
+    /// breaks a parser which only counts them.
+    const CACHE: &str = r#"local archiveCache = {
+
+	internalver = 20,
+
+	archives = {  -- count = 3
+		{
+			name = "06860629e67e11ef60760893bbfb60d5.sdp",
+			path = [[C:\Users\me\AppData\Roaming\info.zero-k.shiro\zk\packages\]],
+			modified = "1787607601",
+			archivedata = {
+				description = "Zero-K {the good one}",
+				game = "Zero-K",
+				modtype = 1,
+				mutator = "1",
+				name = "Zero-K v1.14.8.0",
+				name_pure = "Zero-K",
+				shortgame = "ZK",
+				shortname = "ZK",
+				version = "v1.14.8.0",
+			},
+		},
+		{
+			name = "AlienDesert.sd7",
+			path = [[C:\Users\me\AppData\Roaming\info.zero-k.shiro\zk\maps\]],
+			modified = "1787792768",
+			archivedata = {
+				mapfile = "maps/AlienDesert.smf",
+				modtype = 3,
+				name = "AlienDesert",
+				name_pure = "AlienDesert",
+			},
+		},
+		{
+			name = "quicktutorial.sdz",
+			path = [[C:\Users\me\AppData\Roaming\info.zero-k.shiro\zk\games\]],
+			modified = "1787607601",
+			archivedata = {
+				description = "Mission Mutator",
+				modtype = 0,
+				name = "Quick Tutorial r1",
+				name_pure = "Quick Tutorial",
+			},
+		},
+	},
+}"#;
+
+    #[test]
+    fn the_engines_index_names_a_rapid_package_the_way_gametype_needs() {
+        // The whole point. `games/` cannot see this archive at all: it is a
+        // `.sdp` in `packages/`, and its contents are in the pool.
+        let mut out = Vec::new();
+        read_cache(CACHE, &mut out);
+        let zk = out.iter().find(|c| c.modtype == 1).expect("a game");
+        assert_eq!(zk.name, "Zero-K v1.14.8.0");
+        assert_eq!(zk.file, "06860629e67e11ef60760893bbfb60d5.sdp");
+    }
+
+    #[test]
+    fn a_map_is_told_apart_from_a_game_by_modtype() {
+        let mut out = Vec::new();
+        read_cache(CACHE, &mut out);
+        assert_eq!(out.len(), 3);
+        let map = out.iter().find(|c| c.name == "AlienDesert").expect("a map");
+        assert_eq!(map.modtype, 3);
+        let mutator = out.iter().find(|c| c.modtype == 0).expect("a mutator");
+        assert_eq!(mutator.name, "Quick Tutorial r1");
+    }
+
+    #[test]
+    fn a_brace_inside_a_description_does_not_end_the_entry() {
+        // Counting braces alone reads the first entry as ending inside its own
+        // description, and every entry after it is lost.
+        let mut out = Vec::new();
+        read_cache(CACHE, &mut out);
+        assert_eq!(out.len(), 3, "a brace in free text swallowed the rest");
+    }
+
+    #[test]
+    fn a_windows_path_in_a_long_string_is_not_read_as_a_field() {
+        // `path` is a long-bracket string full of backslashes, and it sits
+        // between the two `name` fields an entry carries.
+        let mut out = Vec::new();
+        read_cache(CACHE, &mut out);
+        assert!(out.iter().all(|c| !c.file.contains('\\')), "{out:?}",);
+    }
+
+    #[test]
+    fn modtype_reads_whether_it_is_quoted_or_not() {
+        assert_eq!(lua_number("modtype = 1,", "modtype"), Some(1));
+        assert_eq!(lua_number("modtype = \"3\",", "modtype"), Some(3));
+        assert_eq!(lua_number("name = \"x\",", "modtype"), None);
+        // `mutator = "1"` must not answer for `modtype`.
+        assert_eq!(lua_number("mutator = \"1\",", "modtype"), None);
+    }
+
+    /// Against a real install, when one is pointed at.
+    ///
+    /// Ignored by default because CI has no Zero-K. Run it with the data
+    /// directory in `SPLAUNCH_TEST_ZK_ROOT`:
+    ///
+    /// ```text
+    /// cargo test --lib -- --ignored --nocapture
+    /// ```
+    ///
+    /// This is the test that would have caught the launch blocker. Every unit
+    /// test above passed while `base_game` was returning a racing mod, because
+    /// no fixture had a rapid install in it.
+    #[test]
+    #[ignore = "needs a Zero-K install in SPLAUNCH_TEST_ZK_ROOT"]
+    fn a_real_install_yields_a_game_the_engine_would_recognise() {
+        let Ok(root) = std::env::var("SPLAUNCH_TEST_ZK_ROOT") else {
+            panic!("set SPLAUNCH_TEST_ZK_ROOT to a Zero-K data directory");
+        };
+        let root = PathBuf::from(root);
+        let info = game_info(&root);
+        println!("engine: {:?}", info.engine);
+        println!("game:   {:?}", info.game);
+        println!("games:  {:?}", info.games.iter().map(|g| &g.name).collect::<Vec<_>>());
+        println!("maps:   {} installed", info.maps.len());
+        assert!(info.engine.is_some(), "no engine found under {}", root.display());
+        let game = info.game.expect("no game found");
+        assert!(
+            game.to_ascii_lowercase().starts_with("zero-k"),
+            "the game to launch came out as {game:?}, which is not Zero-K"
+        );
+    }
+
+    #[test]
+    fn a_map_name_without_its_version_still_finds_the_archive() {
+        // What the shipped example does. The engine wants the archive's own
+        // name, and an author types the map's.
+        let installed = vec!["Comet Catcher Redux v3.1".to_string()];
+        assert_eq!(
+            resolve_map(&installed, "Comet Catcher Redux").as_deref(),
+            Some("Comet Catcher Redux v3.1")
+        );
+    }
+
+    #[test]
+    fn a_filename_matches_the_catalogue_name_it_came_from() {
+        let installed = vec!["icy_crater_v4".to_string()];
+        assert!(map_is_installed(&installed, "Icy Crater v4"));
+    }
+
+    #[test]
+    fn the_engines_own_name_is_preferred_over_the_filename() {
+        // Both are offered, and the one a start script can use wins.
+        let installed = vec!["Icy Crater v4".to_string(), "icy_crater_v4".to_string()];
+        assert_eq!(
+            resolve_map(&installed, "Icy Crater v4").as_deref(),
+            Some("Icy Crater v4")
+        );
+    }
+
+    #[test]
+    fn two_versions_of_a_map_refuse_to_answer_to_the_bare_name() {
+        // Guessing here starts the wrong map with no way to tell.
+        let installed = vec!["Tabula v6.1".to_string(), "Tabula v6.2".to_string()];
+        assert_eq!(resolve_map(&installed, "Tabula"), None);
+        // Naming one of them exactly is still unambiguous.
+        assert_eq!(
+            resolve_map(&installed, "Tabula v6.2").as_deref(),
+            Some("Tabula v6.2")
+        );
+    }
+
+    #[test]
+    fn a_map_that_is_not_there_is_not_invented() {
+        let installed = vec!["Icy Crater v4".to_string()];
+        assert_eq!(resolve_map(&installed, "Comet Catcher Redux"), None);
+        assert_eq!(resolve_map(&installed, ""), None);
+    }
 
     #[test]
     fn the_newest_engine_is_the_newest_by_number_not_by_string() {
