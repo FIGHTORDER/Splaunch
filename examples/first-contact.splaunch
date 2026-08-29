@@ -4,6 +4,7 @@
   "map": "Comet Catcher Redux",
   "game": "",
   "mapElmos": 6144,
+  "mapElmosZ": 8192,
   "teams": [
     {
       "id": 0,
@@ -23,58 +24,58 @@
       "unit": "armcom1",
       "team": 0,
       "x": 1100,
-      "z": 4900
+      "z": 6533
     },
     {
       "unit": "cloakraid",
       "team": 0,
       "x": 1320,
-      "z": 4780
+      "z": 6373
     },
     {
       "unit": "cloakraid",
       "team": 0,
       "x": 1420,
-      "z": 4880
+      "z": 6507
     },
     {
       "unit": "cloakraid",
       "team": 0,
       "x": 1220,
-      "z": 5010
+      "z": 6680
     },
     {
       "unit": "energysolar",
       "team": 0,
       "x": 950,
-      "z": 5080,
+      "z": 6773,
       "facing": 0
     },
     {
       "unit": "staticmex",
       "team": 0,
       "x": 1500,
-      "z": 5100
+      "z": 6800
     },
     {
       "unit": "corcom1",
       "team": 1,
       "x": 4950,
-      "z": 1150,
+      "z": 1533,
       "facing": 2
     },
     {
       "unit": "turretlaser",
       "team": 1,
       "x": 4620,
-      "z": 1420,
+      "z": 1893,
       "facing": 2
     },
     {
       "unit": "turretlaser",
       "team": 1,
       "x": 5180,
-      "z": 1440,
+      "z": 1920,
       "facing": 2,
       "difficultyAtLeast": 3
     },
@@ -82,19 +83,19 @@
       "unit": "cloakraid",
       "team": 1,
       "x": 4780,
-      "z": 1620,
+      "z": 2160,
       "patrol": [
         [
           4780,
-          1620
+          2160
         ],
         [
           3900,
-          2400
+          3200
         ],
         [
           4780,
-          1620
+          2160
         ]
       ]
     },
@@ -102,14 +103,14 @@
       "unit": "cloakraid",
       "team": 1,
       "x": 5060,
-      "z": 1650,
+      "z": 2200,
       "selfPatrol": true
     },
     {
       "unit": "energysolar",
       "team": 1,
       "x": 5250,
-      "z": 1050,
+      "z": 1400,
       "facing": 0
     }
   ],
@@ -117,19 +118,19 @@
     {
       "name": "cloakraid_dead",
       "x": 3050,
-      "z": 3100,
+      "z": 4133,
       "facing": 1
     },
     {
       "name": "cloakraid_dead",
       "x": 3180,
-      "z": 3020,
+      "z": 4027,
       "facing": 3
     },
     {
       "name": "energysolar_dead",
       "x": 2950,
-      "z": 3250,
+      "z": 4333,
       "facing": 0
     }
   ],
@@ -186,12 +187,12 @@
   "markers": [
     {
       "x": 4950,
-      "z": 1150,
+      "z": 1533,
       "text": "Their commander"
     },
     {
       "x": 3060,
-      "z": 3120,
+      "z": 4160,
       "text": "Wrecks - reclaim these"
     }
   ],

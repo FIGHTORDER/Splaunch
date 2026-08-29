@@ -201,9 +201,21 @@ pub struct Scenario {
     /// What losing means, per side.
     #[serde(default)]
     pub defeat: Vec<Defeat>,
-    /// The map's width in elmos.
+    /// The map's width in elmos - the x axis.
     #[serde(default = "default_map_elmos")]
     pub map_elmos: u32,
+    /// The map's depth in elmos - the z axis - where it differs from the width.
+    ///
+    /// Absent means square, which is what a file written before this field
+    /// existed meant. Splaunch carried one figure for both axes and drew every
+    /// map as a square; 145 of the catalogue's 343 maps are not square, so on
+    /// those every unit went in at the wrong depth. The shipped example was one
+    /// of them - it names Comet Catcher Redux, which is 12 x 16.
+    ///
+    /// Left out of the file when it is not needed, so a square scenario still
+    /// reads correctly in a Splaunch that predates this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map_elmos_z: Option<u32>,
     /// Labels on the map, shown from the start.
     #[serde(default)]
     pub markers: Vec<Marker>,
@@ -211,6 +223,13 @@ pub struct Scenario {
     /// one scenario can be three.
     #[serde(default = "default_difficulty")]
     pub difficulty: u32,
+}
+
+impl Scenario {
+    /// The map's depth in elmos, filling in the square a file may have meant.
+    pub fn depth_elmos(&self) -> u32 {
+        self.map_elmos_z.unwrap_or(self.map_elmos)
+    }
 }
 
 /// Zero-K's own default, from `mission_galaxy_campaign_battle.lua`.
@@ -287,15 +306,20 @@ pub fn problems(s: &Scenario) -> Vec<String> {
     /* Off the edge of the map the engine either clamps or drops the unit, and
        either way the scenario is not the one that was drawn. Worth catching
        here because the map size is itself a guess until an author corrects it. */
-    let edge = s.map_elmos as f32;
+    let across = s.map_elmos as f32;
+    let down = s.depth_elmos() as f32;
     if let Some(stray) = s
         .units
         .iter()
-        .find(|u| u.x < 0.0 || u.z < 0.0 || u.x > edge || u.z > edge)
+        .find(|u| u.x < 0.0 || u.z < 0.0 || u.x > across || u.z > down)
     {
         out.push(format!(
-            "A {} sits outside the map, at {}, {}. The map is {} elmos across.",
-            stray.unit, stray.x as i64, stray.z as i64, s.map_elmos
+            "A {} sits outside the map, at {}, {}. The map is {} by {} elmos.",
+            stray.unit,
+            stray.x as i64,
+            stray.z as i64,
+            s.map_elmos,
+            s.depth_elmos()
         ));
     }
     for goal in &s.goals {
@@ -699,6 +723,7 @@ mod tests {
             defeat: vec![],
             format_version: FORMAT_VERSION,
             map_elmos: DEFAULT_MAP_ELMOS,
+            map_elmos_z: None,
             markers: vec![],
             difficulty: DEFAULT_DIFFICULTY,
         }
@@ -880,6 +905,48 @@ mod tests {
         let mut sc = sample();
         sc.units[0].x = 99_000.0;
         assert!(problems(&sc).iter().any(|p| p.contains("outside the map")));
+    }
+
+    #[test]
+    fn the_two_map_axes_are_checked_separately() {
+        /* A square check on a map that is not square is wrong in both
+           directions at once: it waves through a unit past the short edge and
+           refuses one that is comfortably inside the long one. Comet Catcher
+           Redux, which the shipped example names, is 12 x 16. */
+        let mut sc = sample();
+        sc.map_elmos = 12 * 512;
+        sc.map_elmos_z = Some(16 * 512);
+
+        sc.units[0].x = 7000.0; // past the short edge, well inside a square check
+        sc.units[0].z = 100.0;
+        assert!(
+            problems(&sc).iter().any(|p| p.contains("outside the map")),
+            "a unit past the width was allowed: {:?}",
+            problems(&sc)
+        );
+
+        sc.units[0].x = 100.0;
+        sc.units[0].z = 7000.0; // inside the depth, outside a square check
+        assert!(
+            !problems(&sc).iter().any(|p| p.contains("outside the map")),
+            "a unit inside the depth was refused: {:?}",
+            problems(&sc)
+        );
+    }
+
+    #[test]
+    fn a_square_scenario_writes_no_depth_at_all() {
+        /* The depth is left out when it says nothing, so a square scenario
+           saved by this version still opens in one that predates the field. */
+        let sc = sample();
+        let json = serde_json::to_string(&sc).unwrap();
+        assert!(!json.contains("mapElmosZ"), "{json}");
+
+        let mut tall = sample();
+        tall.map_elmos_z = Some(8192);
+        let json = serde_json::to_string(&tall).unwrap();
+        assert!(json.contains("\"mapElmosZ\":8192"), "{json}");
+        assert_eq!(from_json(&json).unwrap().depth_elmos(), 8192);
     }
 
     #[test]
@@ -1152,6 +1219,22 @@ mod tests {
     }
 
     #[test]
+    fn the_example_carries_the_real_shape_of_its_map() {
+        /* Comet Catcher Redux is 12 x 16, and the example was drawn against one
+           figure for both axes - so the editor showed a square, cropped to the
+           middle of a map half again as deep as it was drawn. The example is
+           the first thing anybody opens, so it is the last place to leave that. */
+        let sc = from_json(EXAMPLE).expect("the example does not parse");
+        assert_eq!(sc.map_elmos, 12 * 512);
+        assert_eq!(sc.depth_elmos(), 16 * 512);
+        assert!(
+            !problems(&sc).iter().any(|p| p.contains("outside the map")),
+            "{:?}",
+            problems(&sc)
+        );
+    }
+
+    #[test]
     fn every_unit_in_the_example_is_a_unit_zero_k_has() {
         /* The failure this guards against is the one that made the old palette
            useless: a name that looks plausible, spawns nothing, and takes an
@@ -1222,6 +1305,9 @@ mod tests {
         let sc = from_json(old).unwrap();
         assert_eq!(sc.format_version, FORMAT_VERSION);
         assert_eq!(sc.map_elmos, DEFAULT_MAP_ELMOS);
+        // A file from before the depth existed meant a square map, and says so.
+        assert_eq!(sc.map_elmos_z, None);
+        assert_eq!(sc.depth_elmos(), DEFAULT_MAP_ELMOS);
         assert_eq!(sc.units[0].facing, None);
     }
 
@@ -1311,7 +1397,7 @@ mod tests {
             teams: vec![], units: vec![], objectives: vec![],
             goals: vec![], features: vec![], briefing: None,
             defeat: vec![], format_version: FORMAT_VERSION,
-            map_elmos: DEFAULT_MAP_ELMOS, markers: vec![],
+            map_elmos: DEFAULT_MAP_ELMOS, map_elmos_z: None, markers: vec![],
             difficulty: DEFAULT_DIFFICULTY,
         };
         let p = problems(&empty);

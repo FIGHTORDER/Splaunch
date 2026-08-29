@@ -327,25 +327,41 @@ mod tests {
        clear each other's setup and fail in a way that depends on scheduling. */
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// Run `f` with SHIRO_ZK_ROOT set to `value`, or unset when `None`.
-    fn with_handed_root<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+    /// Run `f` with each named variable set to its value, or unset when `None`.
+    ///
+    /// Every variable at once rather than one per call: the lock is a plain
+    /// `Mutex`, so nesting two of these on one thread deadlocks rather than
+    /// failing, and the test that needs two would hang instead of erroring.
+    fn with_vars<T>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> T) -> T {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let before = std::env::var("SHIRO_ZK_ROOT").ok();
-        // SAFETY: the lock above makes this the only thread touching it.
+        let before: Vec<(&str, Option<String>)> = vars
+            .iter()
+            .map(|(name, _)| (*name, std::env::var(name).ok()))
+            .collect();
+        // SAFETY: the lock above makes this the only thread touching them.
         unsafe {
-            match value {
-                Some(v) => std::env::set_var("SHIRO_ZK_ROOT", v),
-                None => std::env::remove_var("SHIRO_ZK_ROOT"),
+            for (name, value) in vars {
+                match value {
+                    Some(v) => std::env::set_var(name, v),
+                    None => std::env::remove_var(name),
+                }
             }
         }
         let out = f();
         unsafe {
-            match before {
-                Some(v) => std::env::set_var("SHIRO_ZK_ROOT", v),
-                None => std::env::remove_var("SHIRO_ZK_ROOT"),
+            for (name, value) in &before {
+                match value {
+                    Some(v) => std::env::set_var(name, v),
+                    None => std::env::remove_var(name),
+                }
             }
         }
         out
+    }
+
+    /// Run `f` with SHIRO_ZK_ROOT set to `value`, or unset when `None`.
+    fn with_handed_root<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+        with_vars(&[("SHIRO_ZK_ROOT", value)], f)
     }
 
     #[test]
@@ -365,7 +381,19 @@ mod tests {
 
     #[test]
     fn the_managed_install_is_probed_even_without_the_variable() {
-        let c = with_handed_root(None, candidates);
+        /* APPDATA is set here rather than read, because it is Windows-only and
+           the thing under test is how `candidates` uses it, not whether the
+           machine running the tests happens to have one. Without this the test
+           passed on the Windows CI and failed on the Linux release workflow,
+           which also runs `cargo test` - so the Linux packages stopped being
+           published for a reason that had nothing to do with Linux. */
+        let c = with_vars(
+            &[
+                ("SHIRO_ZK_ROOT", None),
+                ("APPDATA", Some(r"C:\Users\test\AppData\Roaming")),
+            ],
+            candidates,
+        );
         assert!(c.iter().any(|(p, _)| p.ends_with("zk")
             && p.to_string_lossy().contains("info.zero-k.shiro")),
             "Shiro's managed directory should be looked at, not only handed over");

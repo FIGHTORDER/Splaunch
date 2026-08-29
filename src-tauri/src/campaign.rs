@@ -21,7 +21,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::customkey;
 use crate::scenario::{write_script, Scenario};
 
 /// The map's archive name, which carries a version the author never typed.
@@ -108,29 +107,63 @@ fn fill(template: &str, map: &str, game: &str, player: &str) -> String {
         .replace(HOLE_PLAYER, player)
 }
 
-/// Every `[MODOPTIONS]` payload, decoded the way Zero-K will decode it.
+/// Every payload in the script, checked for the byte that would destroy it.
 ///
 /// Zero-K rewrites `_` to `=` before decoding, and its own alphabet maps 63 to
 /// `_`, so a payload carrying a literal `_` is destroyed on the way in.
-/// `customkey` pads around it, and a sweep of every byte value at every
-/// alignment says it works. This checks anyway, because a campaign is compiled
-/// once and run by everybody who downloads it: a payload that does not survive
-/// is not one machine's bad luck, it is broken for all of them, and the symptom
-/// is a mission that starts on an empty map with nothing in the log.
+/// `customkey` escapes the bytes that would produce one, and a sweep of every
+/// byte value at every alignment says it works. This checks anyway, because a
+/// campaign is compiled once and run by everybody who downloads it: a payload
+/// that does not survive is not one machine's bad luck, it is broken for all of
+/// them, and the symptom is a mission that starts on an empty map with nothing
+/// in the log.
 fn verify_payloads(script: &str) -> Result<(), String> {
     for (key, value) in payloads(script) {
-        // Only the encoded ones. `noelo=1` is not base64 and is not ours.
-        if value.len() < 8 || !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '=') {
+        if !is_encoded(&key) {
             continue;
         }
-        if customkey::decode_as_the_game_does(&value).is_empty() {
+        /* `_` is the whole failure, and it is checked for directly rather than
+           inferred from a decode. Zero-K rewrites `_` to `=` before decoding
+           and `=` is absent from its alphabet, so everything from there on is
+           dropped - and a truncated Lua literal does not parse, which loses the
+           entire payload rather than one field of it.
+
+           Decoding and testing for emptiness does not catch that: a `_` past
+           the first few characters leaves a non-empty prefix, which passes
+           while the mission is still broken. */
+        if let Some(at) = value.find('_') {
             return Err(format!(
-                "the {key} payload does not survive Zero-K's decoder, so this \
-                 mission would start with nothing on the map"
+                "the {key} payload carries a '_' at byte {at}, which Zero-K's \
+                 decoder reads as end-of-data - this mission would start with \
+                 nothing on the map"
             ));
         }
     }
     Ok(())
+}
+
+/// Whether a start-script key carries one of our base64 payloads.
+///
+/// By key rather than by the shape of the value, which is what it used to be.
+/// Two things break the shape test. Our alphabet is URL-safe, so a payload can
+/// legitimately contain `-` and `_` - and `_` is not alphanumeric, so the old
+/// filter skipped every payload carrying the one byte the check exists to find.
+/// And a template's `Mapname` is `__SHIRO_MAP__`, which is all underscores and
+/// would fail a check it has no business being subject to.
+fn is_encoded(key: &str) -> bool {
+    const KEYS: &[&str] = &[
+        "bonusobjectiveconfig",
+        "objectiveconfig",
+        "defeatconditionconfig",
+        "featurestospawn",
+        "planetmissioninformationtext",
+        "planetmissionmapmarkers",
+        "initalterraform",
+    ];
+    let key = key.trim().to_ascii_lowercase();
+    KEYS.contains(&key.as_str())
+        || key.starts_with("extrastartunits_")
+        || key.starts_with("neutralstartunits_")
 }
 
 /// `key=value;` pairs inside the script's `[MODOPTIONS]` block and its teams.
@@ -353,6 +386,32 @@ mod tests {
             }],
         };
         (campaign, vec![("01-first-contact".into(), example())])
+    }
+
+    #[test]
+    fn every_payload_the_compiler_writes_is_one_this_checks() {
+        /* `is_encoded` names the keys it knows, so a payload added to the
+           compiler and not to it would be waved through in silence - which is
+           the same shape as the bug the check itself exists to catch, one level
+           up. The two answers are compared rather than one trusted: everything
+           `customkey` encodes is a Lua table, so a payload announces itself by
+           decoding to one, without reference to its name. */
+        let mut sc = example();
+        sc.units[0].neutral = true; // Gaia's units ride on the modoptions table
+
+        let script = mission_template(&sc).unwrap();
+        let mut checked = 0;
+        for (key, value) in payloads(&script) {
+            let decoded = crate::customkey::decode_as_the_game_does(&value);
+            let is_a_table = value.len() >= 8 && decoded.first() == Some(&b'{');
+            assert_eq!(
+                is_a_table,
+                is_encoded(&key),
+                "{key} decodes to a Lua table but `is_encoded` does not name it, or the reverse"
+            );
+            checked += usize::from(is_a_table);
+        }
+        assert!(checked >= 5, "the example should exercise more than {checked} payloads");
     }
 
     #[test]

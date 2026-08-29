@@ -74,7 +74,14 @@ export interface Scenario {
   features: Feature[];
   briefing: string | null;
   defeat: Defeat[];
+  /** The map's width in elmos - the x axis. */
   mapElmos: number;
+  /**
+   * The map's depth in elmos - the z axis - where it differs from the width.
+   * Null means square. 145 of the catalogue's 343 maps are not square, and
+   * one figure for both axes put every unit on those at the wrong depth.
+   */
+  mapElmosZ: number | null;
   markers: Marker[];
   /** 1 easy, 2 normal, 3 hard. Gates the per-unit difficulty fields. */
   difficulty: number;

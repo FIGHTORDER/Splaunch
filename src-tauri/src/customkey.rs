@@ -207,6 +207,7 @@ pub fn encode(table: &Table) -> String {
     base64_encode(to_lua(table).as_bytes())
 }
 
+#[cfg(test)]
 /// Zero-K's Base64Decode *including* the `_` -> `=` substitution that
 /// `CustomKeyToUsefulTable` applies first: this is what the game actually
 /// runs, faults and all.
@@ -216,13 +217,11 @@ pub fn encode(table: &Table) -> String {
 /// building on the fault rather than around it. It exists to prove our output
 /// survives it.
 ///
-/// It was `#[cfg(test)]` for that reason, and is no longer, because packing a
-/// campaign proves the same thing for the same reason and it is not a test.
-/// A campaign is compiled once and run by everybody who downloads it, so a
-/// payload that does not survive is not one machine's bad luck - it is a
-/// mission that starts on an empty map for all of them, with nothing in the
-/// log to say why. `campaign::mission_template` refuses rather than shipping
-/// one.
+/// It briefly stopped being test-only, when packing a campaign used it to check
+/// its payloads. That check reads the encoded text for a `_` directly now,
+/// which is both the actual invariant and one the broken decoder cannot
+/// express: a `_` past the first few characters decodes to a non-empty prefix,
+/// so "did it come back empty" passes while the mission is still broken.
 pub(crate) fn decode_as_the_game_does(encoded: &str) -> Vec<u8> {
     let swapped: Vec<u8> = encoded
         .bytes()

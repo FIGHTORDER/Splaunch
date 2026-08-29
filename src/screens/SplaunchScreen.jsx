@@ -1,8 +1,9 @@
 import React from "react";
 import {
-  Button, Input, Tabs, Dialog, MapImage, Icon, IconButton, EmptyState, Badge,
+  Button, Input, Tabs, Dialog, Icon, IconButton, EmptyState, Badge,
 } from "../ds/shiro.js";
 import { label, hint, mono } from "./parts.jsx";
+import Minimap, { MinimapCaption, mapAspect, containBox } from "./Minimap.jsx";
 import Objectives from "./Objectives.jsx";
 import Teams, { colourOf } from "./Teams.jsx";
 import Selection from "./Selection.jsx";
@@ -22,6 +23,18 @@ import {
  * right answer and the thing that stops somebody putting a tank in the sea. We
  * have no heightmap, so drawing them would mean drawing them somewhere
  * invented. The screen says the terrain is unchecked instead. */
+
+const sizeField = {
+  width: 78, font: "var(--w-regular) var(--size-tiny)/1.4 var(--font-mono)",
+  background: "var(--surface-base)", color: "var(--text-body)",
+  border: "1px solid var(--w-12)", padding: "var(--sp-2) var(--sp-3)",
+};
+
+/** "20 x 12", the way Spring talks about map sizes, or nothing when unknown. */
+function sizeNote(m) {
+  if (!m.widthElmos || !m.heightElmos) return null;
+  return `${m.widthElmos / 512} x ${m.heightElmos / 512}`;
+}
 
 /** A wreck for any unit: Zero-K names a unit's corpse after it. */
 function featureNames(roster) {
@@ -123,6 +136,7 @@ export default function SplaunchScreen({
   const [name, setName] = React.useState("Untitled scenario");
   const [map, setMap] = React.useState("");
   const [mapElmos, setMapElmos] = React.useState(DEFAULT_MAP_ELMOS);
+  const [mapDepth, setMapDepth] = React.useState(DEFAULT_MAP_ELMOS);
   const [mapQuery, setMapQuery] = React.useState("");
   const [units, setUnits] = React.useState([]);
   const [features, setFeatures] = React.useState([]);
@@ -150,6 +164,38 @@ export default function SplaunchScreen({
   const [saved, setSaved] = React.useState(undefined);
   const [script, setScript] = React.useState(undefined);
   const boardRef = React.useRef(null);
+  const stageRef = React.useRef(null);
+  const [stage, setStage] = React.useState({ w: 0, h: 0 });
+
+  /* The board is sized in pixels rather than by CSS. `aspect-ratio` alongside a
+     width and a max-height is satisfied by breaking the ratio, and a board
+     whose ratio is wrong is the bug this is fixing. */
+  React.useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return undefined;
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      setStage({ w: r.width, h: r.height });
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [map]);
+
+  /* The biggest box of the map's shape that fits the stage. Both axes are
+     honoured, so a 12x4 map is a strip and a 6x16 one is a column. */
+  const board = React.useMemo(() => {
+    const aspect = mapElmos / Math.max(1, mapDepth);
+    const pad = 2; // the board's own border, which sits inside the stage
+    const w = Math.max(0, Math.min(stage.w - pad, (stage.h - pad) * aspect));
+    return { width: Math.floor(w), height: Math.floor(w / aspect) };
+  }, [stage, mapElmos, mapDepth]);
+
+  /* Route strokes are in viewBox units, and the viewBox is no longer square.
+     Keying them to the longer side keeps them the same weight on every map. */
+  const mapSpan = Math.max(mapElmos, mapDepth);
 
   /* A brush as soon as there is a roster to pick one from - a commander, not
      whatever happens to sort first. Nearly every scenario starts by placing
@@ -179,10 +225,14 @@ export default function SplaunchScreen({
     briefing: briefing.trim() ? briefing : null,
     defeat,
     mapElmos,
+    /* Only when it says something. A square map writes no depth at all, so a
+       scenario that does not need the field still opens in a Splaunch that
+       predates it. */
+    mapElmosZ: mapDepth === mapElmos ? null : mapDepth,
     markers,
     difficulty,
   }), [name, map, install, teams, units, notes, goals, features, briefing, defeat,
-    mapElmos, markers, difficulty]);
+    mapElmos, mapDepth, markers, difficulty]);
 
   /* The Rust side is the authority on what is wrong. The editor used to keep
      its own list, which drifted: a scenario could pass every check an author
@@ -197,6 +247,7 @@ export default function SplaunchScreen({
     setName(sc.name ?? "Untitled scenario");
     setMap(sc.map ?? "");
     setMapElmos(sc.mapElmos || DEFAULT_MAP_ELMOS);
+    setMapDepth(sc.mapElmosZ || sc.mapElmos || DEFAULT_MAP_ELMOS);
     setUnits((sc.units ?? []).map((u, i) => ({ ...u, key: `u${i}` })));
     setFeatures((sc.features ?? []).map((f, i) => ({ ...f, key: `f${i}` })));
     setGoals(sc.goals ?? []);
@@ -214,7 +265,7 @@ export default function SplaunchScreen({
     const box = boardRef.current?.getBoundingClientRect();
     if (!box) return;
     const x = Math.round(Math.min(1, Math.max(0, (e.clientX - box.left) / box.width)) * mapElmos);
-    const z = Math.round(Math.min(1, Math.max(0, (e.clientY - box.top) / box.height)) * mapElmos);
+    const z = Math.round(Math.min(1, Math.max(0, (e.clientY - box.top) / box.height)) * mapDepth);
 
     /* Drawing a route takes over the map: while it is on, a click adds a point
        to the selected unit's patrol rather than placing anything new. */
@@ -281,11 +332,13 @@ export default function SplaunchScreen({
 
   const chooseMap = m => {
     setMap(m.name);
-    /* The catalogue knows how big the map is. Everything used to be placed
-       against a hardcoded 8x8, so a click in the middle of a 16x16 map landed
-       in its top-left quarter. Where the catalogue does not say, the default
-       stands and the footer says so. */
+    /* The catalogue knows how big the map is, on both axes. Everything used to
+       be placed against a hardcoded 8x8, so a click in the middle of a 16x16
+       map landed in its top-left quarter; then against one figure for both
+       axes, which is wrong on the 145 catalogue maps of 343 that are not
+       square. Where the catalogue does not say, the default stands. */
     setMapElmos(m.widthElmos ?? m.heightElmos ?? DEFAULT_MAP_ELMOS);
+    setMapDepth(m.heightElmos ?? m.widthElmos ?? DEFAULT_MAP_ELMOS);
     if (name === "Untitled scenario") setName(`${m.name} scenario`);
   };
 
@@ -325,7 +378,17 @@ export default function SplaunchScreen({
                   style={{ cursor: "pointer", background: "transparent", border: 0,
                     padding: 0, textAlign: "left", color: "inherit", font: "inherit",
                     opacity: onDisk.length && !m.installed ? 0.5 : 1, position: "relative" }}>
-                  <MapImage map={m.name} kind="minimap" ratio="1" caption resourceId={m.resourceId} />
+                  {/* A square slot so the grid stays a grid, with the map
+                      letterboxed inside it at its real proportions. Cropping
+                      to the slot hid that a map is a 3:1 strip until after it
+                      was chosen. */}
+                  <div style={{ position: "relative", aspectRatio: "1",
+                    background: "var(--ink-000)", overflow: "hidden", display: "flex",
+                    alignItems: "center", justifyContent: "center" }}>
+                    <Minimap map={m.name}
+                      style={containBox(mapAspect(m.widthElmos, m.heightElmos))} />
+                    <MinimapCaption map={m.name} note={sizeNote(m)} />
+                  </div>
                   {onDisk.length > 0 && !m.installed && (
                     <span style={{ position: "absolute", top: 6, left: 6,
                       background: "var(--surface-base)", color: "var(--text-faint)",
@@ -392,23 +455,24 @@ export default function SplaunchScreen({
           brush={brush} setBrush={setBrush} roster={roster} source={rosterIn.source} />
 
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
-          <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex",
-            alignItems: "center", justifyContent: "center", padding: "var(--sp-5)" }}>
+          <div ref={stageRef}
+            style={{ position: "relative", flex: 1, minHeight: 0, display: "flex",
+              alignItems: "center", justifyContent: "center", padding: "var(--sp-5)" }}>
             <div ref={boardRef} onClick={place}
-              style={{ position: "relative", width: "min(100%, 68vh)", aspectRatio: "1",
+              style={{ position: "relative", width: board.width, height: board.height,
                 cursor: "crosshair", border: "1px solid var(--w-20)" }}>
-              <MapImage map={map} kind="minimap" ratio="1" saturate={0.7}
+              <Minimap map={map} saturate={0.7}
                 style={{ position: "absolute", inset: 0 }} />
 
               {/* Patrol routes, under everything so the pieces stay clickable. */}
-              <svg viewBox={`0 0 ${mapElmos} ${mapElmos}`} preserveAspectRatio="none"
+              <svg viewBox={`0 0 ${mapElmos} ${mapDepth}`} preserveAspectRatio="none"
                 style={{ position: "absolute", inset: 0, width: "100%", height: "100%",
                   pointerEvents: "none" }}>
                 {units.filter(u => (u.patrol?.length ?? 0) > 1).map(u => (
                   <polyline key={u.key}
                     points={[[u.x, u.z], ...u.patrol].map(p => p.join(",")).join(" ")}
                     fill="none" stroke={u.neutral ? "#8b8b8b" : colourOf(u.team).css}
-                    strokeWidth={mapElmos / 400} strokeDasharray={`${mapElmos / 120}`}
+                    strokeWidth={mapSpan / 400} strokeDasharray={`${mapSpan / 120}`}
                     opacity={0.85} />
                 ))}
               </svg>
@@ -417,7 +481,7 @@ export default function SplaunchScreen({
                 <button key={m.key} type="button" title={m.text}
                   onClick={e => { e.stopPropagation(); setSel({ kind: "marker", key: m.key }); setTab("selection"); }}
                   style={{ position: "absolute",
-                    left: `${(m.x / mapElmos) * 100}%`, top: `${(m.z / mapElmos) * 100}%`,
+                    left: `${(m.x / mapElmos) * 100}%`, top: `${(m.z / mapDepth) * 100}%`,
                     transform: "translate(-50%, -100%)", padding: "1px 4px", cursor: "pointer",
                     background: "rgba(0,0,0,.72)", color: "#fff", border: 0, whiteSpace: "nowrap",
                     font: "var(--w-medium) var(--size-micro)/1.4 var(--font-core)",
@@ -430,7 +494,7 @@ export default function SplaunchScreen({
                 <button key={f.key} type="button" title={`${f.name} (${f.x}, ${f.z})`}
                   onClick={e => { e.stopPropagation(); setSel({ kind: "feature", key: f.key }); setTab("selection"); }}
                   style={{ position: "absolute",
-                    left: `${(f.x / mapElmos) * 100}%`, top: `${(f.z / mapElmos) * 100}%`,
+                    left: `${(f.x / mapElmos) * 100}%`, top: `${(f.z / mapDepth) * 100}%`,
                     transform: "translate(-50%, -50%) rotate(45deg)",
                     width: 9, height: 9, padding: 0, cursor: "pointer",
                     border: "1px solid rgba(0,0,0,.7)", background: "#b0a58c",
@@ -441,7 +505,7 @@ export default function SplaunchScreen({
                 <button key={u.key} type="button" title={`${u.unit} (${u.x}, ${u.z})`}
                   onClick={e => { e.stopPropagation(); setSel({ kind: "unit", key: u.key }); setTab("selection"); }}
                   style={{ position: "absolute",
-                    left: `${(u.x / mapElmos) * 100}%`, top: `${(u.z / mapElmos) * 100}%`,
+                    left: `${(u.x / mapElmos) * 100}%`, top: `${(u.z / mapDepth) * 100}%`,
                     transform: "translate(-50%, -50%)",
                     width: sel?.key === u.key ? 14 : 11, height: sel?.key === u.key ? 14 : 11,
                     padding: 0, cursor: "pointer", border: 0,
@@ -483,11 +547,13 @@ export default function SplaunchScreen({
             </span>
             <label style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)" }}>
               <span style={label}>Map size</span>
-              <input type="number" min={512} step={512} value={mapElmos}
+              <input type="number" min={512} step={512} value={mapElmos} aria-label="Map width in elmos"
                 onChange={e => setMapElmos(Math.max(512, Number(e.target.value) || DEFAULT_MAP_ELMOS))}
-                style={{ width: 78, font: "var(--w-regular) var(--size-tiny)/1.4 var(--font-mono)",
-                  background: "var(--surface-base)", color: "var(--text-body)",
-                  border: "1px solid var(--w-12)", padding: "var(--sp-2) var(--sp-3)" }} />
+                style={sizeField} />
+              <span style={{ ...label, opacity: 0.7 }}>x</span>
+              <input type="number" min={512} step={512} value={mapDepth} aria-label="Map depth in elmos"
+                onChange={e => setMapDepth(Math.max(512, Number(e.target.value) || DEFAULT_MAP_ELMOS))}
+                style={sizeField} />
             </label>
           </div>
         </div>
