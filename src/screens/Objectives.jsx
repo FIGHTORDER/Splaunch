@@ -54,21 +54,25 @@ export const GOALS = [
   },
 ];
 
-/** A sentence describing what the game will check, for the list. */
-export function describe(goal) {
+/** A sentence describing what the game will check, for the list.
+ *
+ * `name` turns an internal unit name into the one a player would recognise -
+ * `cloakraid` is a Glaive - and defaults to leaving it alone.
+ */
+export function describe(goal, name = u => u) {
   switch (goal.kind) {
     case "surviveUntil":
       return goal.units.length
-        ? `Keep ${goal.units.join(", ")} alive until ${clock(goal.seconds)}`
+        ? `Keep ${goal.units.map(name).join(", ")} alive until ${clock(goal.seconds)}`
         : `Survive until ${clock(goal.seconds)}`;
     case "buildBy":
-      return `Build ${goal.count} × ${goal.unit} by ${clock(goal.seconds)}`;
+      return `Build ${goal.count} × ${name(goal.unit)} by ${clock(goal.seconds)}`;
     case "haveAtOnce":
-      return `Have ${goal.count} × ${goal.unit} at once`;
+      return `Have ${goal.count} × ${name(goal.unit)} at once`;
     case "destroyAllBy":
-      return `Destroy all ${goal.unit} by ${clock(goal.seconds)}`;
+      return `Destroy all ${name(goal.unit)} by ${clock(goal.seconds)}`;
     case "killCount":
-      return `Kill ${goal.count} × ${goal.unit}`;
+      return `Kill ${goal.count} × ${name(goal.unit)}`;
     case "winBefore":
       return `Win before ${clock(goal.seconds)}`;
     default:
@@ -149,10 +153,19 @@ export default function Objectives({ goals, setGoals, notes, setNotes, roster })
   const [note, setNote] = React.useState("");
   const [open, setOpen] = React.useState(null);
   const firstUnit = roster[0]?.name ?? "";
+  const titleOf = React.useCallback(
+    unit => roster.find(u => u.name === unit)?.title ?? unit,
+    [roster],
+  );
 
+  /* The player reads this verbatim - Zero-K's objectives panel renders
+     `description` with no substitution of its own. It used to be seeded with
+     the palette's title, so an author who did not retype it shipped the menu
+     label and the game showed "Kill n", with the n never filled in. */
   const add = kind => {
     const spec = GOALS.find(g => g.kind === kind);
-    setGoals(v => [...v, { description: spec.title, goal: spec.make(firstUnit) }]);
+    const goal = spec.make(firstUnit);
+    setGoals(v => [...v, { description: describe(goal, titleOf), goal }]);
     setOpen(goals.length);
   };
 
@@ -184,7 +197,7 @@ export default function Objectives({ goals, setGoals, notes, setNotes, roster })
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {objective.description || "(no description)"}
               </span>
-              <span style={{ ...hint, display: "block" }}>{describe(objective.goal)}</span>
+              <span style={{ ...hint, display: "block" }}>{describe(objective.goal, titleOf)}</span>
             </button>
             <IconButton icon={open === i ? "chevron-up" : "chevron-down"} label="Edit" size="sm"
               onClick={() => setOpen(open === i ? null : i)} />

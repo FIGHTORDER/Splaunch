@@ -8,7 +8,8 @@ import Objectives from "./Objectives.jsx";
 import Teams, { colourOf } from "./Teams.jsx";
 import Selection from "./Selection.jsx";
 import {
-  scenarioProblems, scenarioScript, saveScenario, openScenario, exampleScenario,
+  scenarioProblems, scenarioWarnings, scenarioScript, saveScenario, openScenario,
+  exampleScenario, importPreset, exportPreset,
   mapIsInstalled,
   FORMAT_VERSION, DEFAULT_MAP_ELMOS, DEFAULT_DIFFICULTY,
 } from "../net/splaunch.ts";
@@ -132,6 +133,13 @@ export default function SplaunchScreen({
   player = "Player", onTest, onBack, testError, running,
 }) {
   const roster = rosterIn.units ?? [];
+  /* Zero-K spawns a team's commander itself, so a placed one is the team's
+     start position rather than a unit. Its own grouping is the authority on
+     what counts - see `game::is_commander`. */
+  const commanderNames = React.useMemo(
+    () => new Set(roster.filter(u => u.group === "Commanders").map(u => u.name)),
+    [roster],
+  );
 
   const [name, setName] = React.useState("Untitled scenario");
   const [map, setMap] = React.useState("");
@@ -145,6 +153,8 @@ export default function SplaunchScreen({
   const [briefing, setBriefing] = React.useState("");
   const [defeat, setDefeat] = React.useState([]);
   const [markers, setMarkers] = React.useState([]);
+  const [modOptions, setModOptions] = React.useState({});
+  const [presetNote, setPresetNote] = React.useState(null);
   const [difficulty, setDifficulty] = React.useState(DEFAULT_DIFFICULTY);
   const [routing, setRouting] = React.useState(false);
   const [teams, setTeams] = React.useState([
@@ -159,6 +169,7 @@ export default function SplaunchScreen({
   const [team, setTeam] = React.useState(0);
   const [tab, setTab] = React.useState("selection");
   const [problems, setProblems] = React.useState([]);
+  const [warnings, setWarnings] = React.useState([]);
   const [issuesOpen, setIssuesOpen] = React.useState(false);
   const [blockedOpen, setBlockedOpen] = React.useState(false);
   const [saved, setSaved] = React.useState(undefined);
@@ -197,6 +208,24 @@ export default function SplaunchScreen({
      Keying them to the longer side keeps them the same weight on every map. */
   const mapSpan = Math.max(mapElmos, mapDepth);
 
+  /* Where Zero-K will put each team's commander. Mirrors `team_start` in
+     scenario.rs, which is the authority - this only draws it. Shown because the
+     rule is otherwise invisible: the game spawns a commander whether or not one
+     was placed, and an author who placed none had no way to see that it was
+     going to appear in the middle of the map. */
+  const starts = React.useMemo(() => teams.map(t => {
+    const mine = units.filter(u => !u.neutral && u.team === t.id);
+    const commander = mine.find(u => commanderNames.has(u.unit));
+    if (commander) return { team: t.id, x: commander.x, z: commander.z, placed: true };
+    if (!mine.length) return { team: t.id, x: mapElmos / 2, z: mapDepth / 2, placed: false };
+    return {
+      team: t.id,
+      x: mine.reduce((a, u) => a + u.x, 0) / mine.length,
+      z: mine.reduce((a, u) => a + u.z, 0) / mine.length,
+      placed: false,
+    };
+  }), [teams, units, commanderNames, mapElmos, mapDepth]);
+
   /* A brush as soon as there is a roster to pick one from - a commander, not
      whatever happens to sort first. Nearly every scenario starts by placing
      one, and the alternative was the Airplane Plant's construction aircraft. */
@@ -229,10 +258,11 @@ export default function SplaunchScreen({
        scenario that does not need the field still opens in a Splaunch that
        predates it. */
     mapElmosZ: mapDepth === mapElmos ? null : mapDepth,
+    modOptions,
     markers,
     difficulty,
   }), [name, map, install, teams, units, notes, goals, features, briefing, defeat,
-    mapElmos, mapDepth, markers, difficulty]);
+    mapElmos, mapDepth, modOptions, markers, difficulty]);
 
   /* The Rust side is the authority on what is wrong. The editor used to keep
      its own list, which drifted: a scenario could pass every check an author
@@ -240,6 +270,7 @@ export default function SplaunchScreen({
   React.useEffect(() => {
     let live = true;
     scenarioProblems(scenario).then(p => { if (live) setProblems(p); }, () => {});
+    scenarioWarnings(scenario).then(w => { if (live) setWarnings(w); }, () => {});
     return () => { live = false; };
   }, [scenario]);
 
@@ -255,6 +286,7 @@ export default function SplaunchScreen({
     setBriefing(sc.briefing ?? "");
     setDefeat(sc.defeat ?? []);
     setMarkers((sc.markers ?? []).map((m, i) => ({ ...m, key: `m${i}` })));
+    setModOptions(sc.modOptions ?? {});
     setDifficulty(sc.difficulty || DEFAULT_DIFFICULTY);
     setTeams(sc.teams?.length ? sc.teams : teams);
     setSel(null);
@@ -345,6 +377,20 @@ export default function SplaunchScreen({
   const openFile = () => openScenario().then(sc => { if (sc) load(sc); }, () => {});
   const openExample = () => exampleScenario().then(load, () => {});
 
+  /* Coilbox's bottom layer: a preset is the battle - map, game, who is playing,
+     modoptions - and a scenario is what happens inside it. So a preset is laid
+     over what is already here rather than replacing it, and whatever could not
+     come with it is said out loud. See vendor/coilbox/INTEROP.md. */
+  const openPreset = (text) => importPreset(scenario, text).then(applied => {
+    if (!applied) return;
+    load(applied.scenario);
+    setPresetNote({ name: applied.name, ignored: applied.ignored });
+  }, e => setPresetNote({ name: null, ignored: [String(e)] }));
+
+  const savePreset = () => exportPreset(scenario).then(
+    p => { if (p) setSaved(`Preset written to ${p}`); },
+    e => setPresetNote({ name: null, ignored: [String(e)] }));
+
   if (!map) {
     return (
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -353,6 +399,7 @@ export default function SplaunchScreen({
           {onBack && <Button variant="ghost" size="sm" icon="arrow-left" onClick={onBack}>Apps</Button>}
           <span style={label}>SPLAUNCH — NEW SCENARIO</span>
           <span style={{ flex: 1 }} />
+          <Button variant="secondary" size="sm" onClick={() => openPreset()}>Coilbox preset</Button>
           <Button variant="secondary" size="sm" onClick={openExample}>Open the example</Button>
           <Button variant="secondary" size="sm" icon="folder" onClick={openFile}>Open</Button>
         </div>
@@ -434,6 +481,9 @@ export default function SplaunchScreen({
             t => setScript(t || "(nothing - fix the problems first)"),
             e => setScript(String(e?.message ?? e)))}>Script</Button>
         <Button variant="ghost" size="sm" icon="folder" onClick={openFile}>Open</Button>
+        <Button variant="ghost" size="sm" icon="share" onClick={savePreset}
+          title="Write the battle - map, game, sides, modoptions - as a Coilbox preset">
+          Preset</Button>
         <Button variant="ghost" size="sm" icon="save"
           onClick={() => saveScenario(scenario).then(
             p => setSaved(p ? `Saved to ${p}` : undefined), () => {})}>Save</Button>
@@ -444,6 +494,15 @@ export default function SplaunchScreen({
               font: "var(--w-semibold) var(--size-micro)/1 var(--font-core)",
               letterSpacing: "var(--track-label)", textTransform: "uppercase" }}>
             {problems.length} problem{problems.length > 1 ? "s" : ""}
+          </button>
+        )}
+        {problems.length === 0 && warnings.length > 0 && (
+          <button type="button" onClick={() => setIssuesOpen(true)}
+            style={{ background: "none", border: "1px solid var(--signal-warn)", cursor: "pointer",
+              height: 20, padding: "0 var(--sp-3)", color: "var(--signal-warn)",
+              font: "var(--w-semibold) var(--size-micro)/1 var(--font-core)",
+              letterSpacing: "var(--track-label)", textTransform: "uppercase" }}>
+            {warnings.length} to know
           </button>
         )}
         <Button variant="primary" size="sm" icon="play" onClick={test}
@@ -476,6 +535,20 @@ export default function SplaunchScreen({
                     opacity={0.85} />
                 ))}
               </svg>
+
+              {/* Where each team's commander arrives. Hollow when nobody placed
+                  one, because then the position is Splaunch's guess. */}
+              {starts.map(s => (
+                <div key={`start${s.team}`} title={s.placed
+                  ? `Team ${s.team} starts here - its commander`
+                  : `Team ${s.team} starts here - no commander placed, so this is a guess`}
+                  style={{ position: "absolute", pointerEvents: "none",
+                    left: `${(s.x / mapElmos) * 100}%`, top: `${(s.z / mapDepth) * 100}%`,
+                    transform: "translate(-50%, -50%)", width: 26, height: 26,
+                    borderRadius: "50%", boxSizing: "border-box",
+                    border: `2px ${s.placed ? "solid" : "dashed"} ${colourOf(s.team).css}`,
+                    opacity: s.placed ? 0.75 : 0.95 }} />
+              ))}
 
               {markers.map(m => (
                 <button key={m.key} type="button" title={m.text}
@@ -616,6 +689,32 @@ export default function SplaunchScreen({
         </div>
       </div>
 
+      <Dialog open={!!presetNote} width={460}
+        title={presetNote?.name ? `Preset: ${presetNote.name}` : "That preset did not open"}
+        onClose={() => setPresetNote(null)}
+        footer={<Button variant="primary" onClick={() => setPresetNote(null)}>Right</Button>}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
+          {presetNote?.name && (
+            <span style={{ font: "var(--text-ui-sm)", color: "var(--text-body)", lineHeight: 1.5 }}>
+              The map, the sides and the modoptions came across. Everything you had
+              placed is untouched - a preset is the battle, not what happens in it.
+            </span>
+          )}
+          {(presetNote?.ignored ?? []).map(t => (
+            <div key={t} style={{ display: "flex", gap: "var(--sp-4)", alignItems: "flex-start" }}>
+              <Icon name="info" size={14} style={{ color: "var(--signal-warn)", marginTop: 2 }} />
+              <span style={{ font: "var(--text-ui-sm)", color: "var(--text-low)",
+                lineHeight: 1.5 }}>{t}</span>
+            </div>
+          ))}
+          {presetNote?.name && (presetNote?.ignored ?? []).length === 0 && (
+            <span style={{ font: "var(--text-ui-sm)", color: "var(--text-low)" }}>
+              Nothing was lost on the way in.
+            </span>
+          )}
+        </div>
+      </Dialog>
+
       <Dialog open={issuesOpen} title="Before you test" width={460}
         onClose={() => setIssuesOpen(false)}
         footer={<Button variant="primary" onClick={() => setIssuesOpen(false)}>Back to the map</Button>}>
@@ -628,6 +727,19 @@ export default function SplaunchScreen({
                 lineHeight: 1.5 }}>{t}</span>
             </div>
           ))}
+          {warnings.map(t => (
+            <div key={t} style={{ display: "flex", gap: "var(--sp-4)", alignItems: "flex-start" }}>
+              <Icon name="info" size={14}
+                style={{ color: "var(--signal-warn)", marginTop: 2 }} />
+              <span style={{ font: "var(--text-ui-sm)", color: "var(--text-low)",
+                lineHeight: 1.5 }}>{t}</span>
+            </div>
+          ))}
+          {problems.length === 0 && warnings.length === 0 && (
+            <span style={{ font: "var(--text-ui-sm)", color: "var(--text-low)" }}>
+              Nothing to report.
+            </span>
+          )}
           {testError && (
             <span style={{ font: "var(--text-ui-sm)", color: "var(--signal-warn)" }}>{testError}</span>
           )}

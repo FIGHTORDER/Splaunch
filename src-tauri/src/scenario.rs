@@ -216,6 +216,14 @@ pub struct Scenario {
     /// reads correctly in a Splaunch that predates this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub map_elmos_z: Option<u32>,
+    /// Modoptions the battle carries besides the mission's own.
+    ///
+    /// Where a Coilbox preset's `modOptionValues` land: a preset sets up a
+    /// battle, and a battle is partly its modoptions. Written before the
+    /// mission's keys so that a preset cannot overwrite the mission engine -
+    /// the last value of a repeated key is the one the engine keeps.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub mod_options: std::collections::BTreeMap<String, String>,
     /// Labels on the map, shown from the start.
     #[serde(default)]
     pub markers: Vec<Marker>,
@@ -330,6 +338,36 @@ pub fn problems(s: &Scenario) -> Vec<String> {
     out
 }
 
+/// What an author should know but that must not stop a launch.
+///
+/// Separate from `problems` because that list is fatal - `write_script` refuses
+/// on its first entry - and none of these are worth refusing over. They are the
+/// things that are silently *decided* for an author rather than wrong.
+pub fn warnings(s: &Scenario) -> Vec<String> {
+    let mut out = Vec::new();
+    /* Zero-K spawns every team a commander whether or not the author placed
+       one, and puts it at the team's start position. A placed commander says
+       where that is; without one the position is a guess. Unmentioned, the
+       guess reads as the game ignoring the scenario - which is exactly how it
+       looked the first time a mission was launched with no commander on it. */
+    for t in &s.teams {
+        if commander_index(s, t.id).is_some() {
+            continue;
+        }
+        let has_units = s.units.iter().any(|u| !u.neutral && u.team == t.id);
+        let (x, z) = team_start(s, t.id);
+        let whose = if t.ai.is_none() { "your team" } else { "team" };
+        out.push(format!(
+            "Zero-K gives {whose} {} a commander whether or not you place one.              With none placed it will start at {}, {} - {}. Place a commander to say where.",
+            t.id,
+            x as i64,
+            z as i64,
+            if has_units { "the middle of its units" } else { "the middle of the map" },
+        ));
+    }
+    out
+}
+
 /// Zero-K's comparison constants, from `mission_galaxy_campaign_battle.lua`.
 const AT_LEAST: f64 = 1.0;
 const AT_MOST: f64 = 2.0;
@@ -414,6 +452,12 @@ pub fn mission_modoptions(s: &Scenario) -> Vec<(String, String)> {
     // reports results against it, and nothing is listening for ours.
     out.push(("singleplayercampaignbattleid".into(), "splaunch".into()));
 
+    /* Makes Zero-K read each team's `start_x`/`start_z` instead of the start
+       box (`start_unit_setup.lua:38`, `:255-259`). Without it the commanders
+       spawn from the box, which this writes as a single point in the corner of
+       the map, and no amount of placing moves them. */
+    out.push(("fixedstartpos".into(), "1".into()));
+
     if !s.goals.is_empty() {
         let mut list = Table::new();
         for objective in &s.goals {
@@ -468,23 +512,29 @@ pub fn mission_modoptions(s: &Scenario) -> Vec<(String, String)> {
        objectives were dropped between pressing Test and the game starting.
        Zero-K's briefing window takes a name, a description and a list of tips,
        and a sentence that is not a unit count is exactly a tip. */
+    /* Always sent, even with nothing to say. The briefing widget does
+       `caption = "Planet " .. planetInformation.name` with no guard
+       (`mission_galaxy_battle_handler.lua:327`) over a table that defaults to
+       empty, so an absent key is a nil concatenation - a Lua error during
+       `widget:Initialize`, which takes the whole widget down. That widget also
+       draws the objectives panel, so a scenario with no briefing lost its
+       objectives display too, and looked from the outside like objectives were
+       never evaluated. */
     let notes: Vec<&String> = s.objectives.iter().filter(|o| !o.trim().is_empty()).collect();
     let briefing = s.briefing.as_deref().map(str::trim).filter(|t| !t.is_empty());
-    if briefing.is_some() || !notes.is_empty() {
-        let mut info = Table::new();
-        info.set("name", ck::s(&s.name));
-        info.set("description", ck::s(briefing.unwrap_or("")));
-        if !notes.is_empty() {
-            let mut tips = Table::new();
-            for note in notes {
-                let mut tip = Table::new();
-                tip.set("text", ck::s(note));
-                tips.push(ck::t(tip));
-            }
-            info.set("tips", ck::t(tips));
+    let mut info = Table::new();
+    info.set("name", ck::s(&s.name));
+    info.set("description", ck::s(briefing.unwrap_or("")));
+    if !notes.is_empty() {
+        let mut tips = Table::new();
+        for note in notes {
+            let mut tip = Table::new();
+            tip.set("text", ck::s(note));
+            tips.push(ck::t(tip));
         }
-        out.push(("planetmissioninformationtext".into(), customkey::encode(&info)));
+        info.set("tips", ck::t(tips));
     }
+    out.push(("planetmissioninformationtext".into(), customkey::encode(&info)));
 
     /* Defeat conditions, indexed by allyteam the way the gadget indexes them.
        Without any, a scenario ends only when one side has nothing left, which
@@ -580,6 +630,42 @@ fn placed_fields(unit: &Placed) -> Table {
     entry
 }
 
+/// The placed unit that stands for a team's commander, if the author placed one.
+///
+/// Zero-K spawns each team's commander itself and puts it at the team's
+/// `start_x`/`start_z` (`start_unit_setup.lua:255-259`); `extrastartunits` are
+/// what arrives *besides* it. So a placed commander is not a unit to spawn - it
+/// is where the team starts, and spawning it as well gave the team two, one of
+/// them wherever the start box happened to point.
+fn commander_index(s: &Scenario, team: u32) -> Option<usize> {
+    s.units
+        .iter()
+        .position(|u| !u.neutral && u.team == team && crate::game::is_commander(&u.unit))
+}
+
+/// Where a team's commander arrives.
+///
+/// The placed commander if there is one. Failing that the middle of what the
+/// team does have, because Zero-K spawns a commander whether or not the author
+/// placed one, and next to their own units is the only defensible guess. The
+/// middle of the map when the team has nothing at all - anywhere is arbitrary,
+/// but a corner is arbitrary *and* looks like a bug, which is how this was
+/// found.
+fn team_start(s: &Scenario, team: u32) -> (f32, f32) {
+    if let Some(i) = commander_index(s, team) {
+        return (s.units[i].x, s.units[i].z);
+    }
+    let mine: Vec<&Placed> = s.units.iter().filter(|u| !u.neutral && u.team == team).collect();
+    if mine.is_empty() {
+        return (s.map_elmos as f32 / 2.0, s.depth_elmos() as f32 / 2.0);
+    }
+    let n = mine.len() as f32;
+    (
+        mine.iter().map(|u| u.x).sum::<f32>() / n,
+        mine.iter().map(|u| u.z).sum::<f32>() / n,
+    )
+}
+
 /// Chunk placed units into the numbered custom keys the gadget walks.
 ///
 /// The gadget reads `<prefix>1`, `<prefix>2` and so on until one is missing, so
@@ -628,6 +714,12 @@ pub fn write_script(s: &Scenario, player: &str) -> Result<String, String> {
     out.push_str("\t[MODOPTIONS]\n\t{\n");
     // Nothing a scenario does should count towards anybody's rating.
     key(&mut out, "\t\t", "noelo", 1);
+    /* The battle's own, from a preset. First, so the mission's keys below
+       win any collision - losing `singleplayercampaignbattleid` to a stray
+       preset value would disarm the mission engine entirely. */
+    for (name, value) in &s.mod_options {
+        key(&mut out, "\t\t", &escape(name), escape(value));
+    }
     // The mission engine, its objectives, features and briefing. Not escaped:
     // these are base64 of our own making and contain no delimiter, and running
     // them through `escape` could only corrupt them.
@@ -657,9 +749,25 @@ pub fn write_script(s: &Scenario, player: &str) -> Result<String, String> {
         key(&mut out, "\t\t", "TeamLeader", 0);
         key(&mut out, "\t\t", "AllyTeam", t.ally);
         key(&mut out, "\t\t", "RGBColor", escape(&t.colour));
+        /* Where Zero-K puts this team's commander. Read off the team's custom
+           keys, and only when `fixedstartpos` is set - without both, the engine
+           falls back to the start box, and the box below is a single point in
+           the corner of the map. That is why every commander arrived in a
+           corner however carefully it had been placed. */
+        let (sx, sz) = team_start(s, t.id);
+        key(&mut out, "\t\t", "start_x", sx.round() as i64);
+        key(&mut out, "\t\t", "start_z", sz.round() as i64);
+
         // Placed units ride on the team that owns them, which is how Zero-K
-        // knows whose they are without a field saying so.
-        let mine = s.units.iter().filter(|u| !u.neutral && u.team == t.id);
+        // knows whose they are without a field saying so. The commander is not
+        // among them: it is the start position, and the game spawns it.
+        let commander = commander_index(s, t.id);
+        let mine = s
+            .units
+            .iter()
+            .enumerate()
+            .filter(|(i, u)| !u.neutral && u.team == t.id && Some(*i) != commander)
+            .map(|(_, u)| u);
         for (name, value) in start_unit_keys(mine, "extrastartunits") {
             key(&mut out, "\t\t", &name, value);
         }
@@ -675,12 +783,12 @@ pub fn write_script(s: &Scenario, player: &str) -> Result<String, String> {
         /* An empty start box, copied from Zero-K's own mission script, which
            carries exactly these four on every allyteam.
 
-           `StartposType=2` is "choose in game", and a mission does not want the
-           player choosing anything - the commander arrives through
-           `extrastartunits` at the position the author placed it. What the
-           engine does with a type-2 start and no boxes at all is not something
-           we know, and this script has never been launched, so it matches the
-           one that has rather than finding out. */
+           It is not an empty box but a single point in the top-right corner -
+           top and bottom both 0, left and right both 1 - and until
+           `fixedstartpos` was sent that is exactly where every commander
+           spawned, however carefully it had been placed. It stays because
+           `fixedstartpos` bypasses it for spawning and it was copied from a
+           mission that runs; a team's real start is `start_x`/`start_z`. */
         for (name, value) in [
             ("StartRectTop", 0),
             ("StartRectBottom", 0),
@@ -709,13 +817,25 @@ mod tests {
                 Team { id: 0, ally: 0, ai: None, colour: "0 0 1".into() },
                 Team { id: 1, ally: 1, ai: Some("NullAI".into()), colour: "1 0 0".into() },
             ],
-            units: vec![Placed {
-                unit: "armcom1".into(),
-                team: 0,
-                x: 512.0,
-                z: 512.0,
-                ..Default::default()
-            }],
+            /* A commander and something else. The commander is the team's
+               start position rather than one of its `extrastartunits`, so a
+               fixture with only a commander exercises none of the spawn path. */
+            units: vec![
+                Placed {
+                    unit: "armcom1".into(),
+                    team: 0,
+                    x: 512.0,
+                    z: 512.0,
+                    ..Default::default()
+                },
+                Placed {
+                    unit: "cloakraid".into(),
+                    team: 0,
+                    x: 640.0,
+                    z: 640.0,
+                    ..Default::default()
+                },
+            ],
             objectives: vec!["Destroy the enemy commander".into()],
             goals: vec![],
             features: vec![],
@@ -724,6 +844,7 @@ mod tests {
             format_version: FORMAT_VERSION,
             map_elmos: DEFAULT_MAP_ELMOS,
             map_elmos_z: None,
+            mod_options: Default::default(),
             markers: vec![],
             difficulty: DEFAULT_DIFFICULTY,
         }
@@ -843,12 +964,16 @@ mod tests {
     }
 
     #[test]
-    fn a_briefing_is_only_sent_when_there_is_something_to_read() {
-        // Nothing to say: no briefing, and no notes either.
+    fn a_briefing_is_sent_whether_or_not_there_is_something_to_read() {
+        /* This used to assert the opposite, and the opposite was the bug: an
+           absent key is a nil concatenation in the widget that draws the
+           briefing *and* the objectives, so a scenario with nothing to say
+           lost both panels. Sent always, empty if need be. */
         let mut bare = sample();
         bare.objectives.clear();
+        bare.briefing = None;
         let script = write_script(&bare, "Qrow").unwrap();
-        assert!(!script.contains("planetmissioninformationtext"));
+        assert!(script.contains("planetmissioninformationtext"), "{script}");
 
         let mut sc = sample();
         sc.briefing = Some("The dam will not hold.".into());
@@ -905,6 +1030,22 @@ mod tests {
         let mut sc = sample();
         sc.units[0].x = 99_000.0;
         assert!(problems(&sc).iter().any(|p| p.contains("outside the map")));
+    }
+
+    #[test]
+    fn the_briefing_key_is_sent_even_with_nothing_to_say() {
+        /* An absent `planetmissioninformationtext` is a nil concatenation in
+           `mission_galaxy_battle_handler.lua:327`, which kills the widget that
+           draws both the briefing and the objectives panel. A scenario with no
+           briefing must still send a name. */
+        let mut sc = sample();
+        sc.briefing = None;
+        sc.objectives = vec![];
+
+        let script = write_script(&sc, "Qrow").unwrap();
+        let lua = modoption_lua(&script, "planetmissioninformationtext");
+        assert!(lua.contains("name="), "no name in {lua}");
+        assert!(lua.contains("description="), "no description in {lua}");
     }
 
     #[test]
@@ -985,7 +1126,7 @@ mod tests {
     #[test]
     fn a_patrol_route_travels_as_a_list_of_points() {
         let mut sc = sample();
-        sc.units[0].patrol = vec![[100.0, 200.0], [800.0, 900.0]];
+        sc.units[1].patrol = vec![[100.0, 200.0], [800.0, 900.0]];
         let script = write_script(&sc, "Qrow").unwrap();
         let team0 = script.split("[TEAM0]").nth(1).unwrap().split("[TEAM1]").next().unwrap();
         let value = value_of(team0, "extrastartunits_1").unwrap();
@@ -999,8 +1140,8 @@ mod tests {
            it finds, so sending both would silently discard the route the author
            drew and leave the unit turning circles instead. */
         let mut sc = sample();
-        sc.units[0].patrol = vec![[10.0, 20.0], [30.0, 40.0]];
-        sc.units[0].self_patrol = true;
+        sc.units[1].patrol = vec![[10.0, 20.0], [30.0, 40.0]];
+        sc.units[1].self_patrol = true;
         let script = write_script(&sc, "Qrow").unwrap();
         let team0 = script.split("[TEAM0]").nth(1).unwrap().split("[TEAM1]").next().unwrap();
         let lua = String::from_utf8(
@@ -1009,7 +1150,7 @@ mod tests {
         assert!(!lua.contains("selfPatrol"), "{lua}");
 
         // A one-point "route" is not a route, so it falls through.
-        sc.units[0].patrol = vec![[10.0, 20.0]];
+        sc.units[1].patrol = vec![[10.0, 20.0]];
         let script = write_script(&sc, "Qrow").unwrap();
         let team0 = script.split("[TEAM0]").nth(1).unwrap().split("[TEAM1]").next().unwrap();
         let lua = String::from_utf8(
@@ -1026,7 +1167,7 @@ mod tests {
 
         let mut sc = sample();
         sc.difficulty = 3;
-        sc.units[0].difficulty_at_least = Some(3);
+        sc.units[1].difficulty_at_least = Some(3);
         let script = write_script(&sc, "Qrow").unwrap();
         let block = script.split("[MODOPTIONS]").nth(1).unwrap();
         assert_eq!(value_of(block, "planetmissiondifficulty").as_deref(), Some("3"));
@@ -1397,7 +1538,8 @@ mod tests {
             teams: vec![], units: vec![], objectives: vec![],
             goals: vec![], features: vec![], briefing: None,
             defeat: vec![], format_version: FORMAT_VERSION,
-            map_elmos: DEFAULT_MAP_ELMOS, map_elmos_z: None, markers: vec![],
+            map_elmos: DEFAULT_MAP_ELMOS, map_elmos_z: None,
+            mod_options: Default::default(), markers: vec![],
             difficulty: DEFAULT_DIFFICULTY,
         };
         let p = problems(&empty);
@@ -1548,7 +1690,53 @@ mod tests {
             .expect("no [TEAM0] section");
         let value = value_of(team0, "extrastartunits_1").expect("no units on team 0");
         let lua = String::from_utf8(decode_as_the_game_does(&value)).unwrap();
-        assert!(lua.contains("armcom1"), "{lua}");
+        // Not the commander: see the test below for where that one goes.
+        assert!(lua.contains("cloakraid"), "{lua}");
+    }
+
+    #[test]
+    fn a_placed_commander_is_where_the_team_starts_not_a_unit_to_spawn() {
+        /* Zero-K spawns each team's commander itself, at the team's
+           `start_x`/`start_z`, and `extrastartunits` are what arrives besides
+           it. Sending a commander as a start unit gave the team two of them -
+           the placed one, and the game's own in whatever corner the start box
+           named. Every scenario launched before this had that. */
+        let script = write_script(&sample(), "Qrow").unwrap();
+
+        let block = script.split("[MODOPTIONS]").nth(1).unwrap();
+        assert_eq!(value_of(block, "fixedstartpos").as_deref(), Some("1"),
+            "without this the engine ignores start_x and uses the start box: {block}");
+
+        let team0 = script.split("[TEAM0]").nth(1).unwrap().split("[TEAM1]").next().unwrap();
+        assert_eq!(value_of(team0, "start_x").as_deref(), Some("512"), "{team0}");
+        assert_eq!(value_of(team0, "start_z").as_deref(), Some("512"), "{team0}");
+
+        let lua = String::from_utf8(
+            decode_as_the_game_does(&value_of(team0, "extrastartunits_1").unwrap())).unwrap();
+        assert!(!lua.contains("armcom1"), "the commander was spawned as well: {lua}");
+    }
+
+    #[test]
+    fn a_team_with_no_commander_starts_among_its_own_units() {
+        /* Zero-K spawns a commander whether or not the author placed one, so
+           the position still has to say something. Next to the team's own units
+           beats the corner of the map, which is what an unset start meant. */
+        let mut sc = sample();
+        sc.units = vec![
+            Placed { unit: "cloakraid".into(), team: 0, x: 1000.0, z: 2000.0, ..Default::default() },
+            Placed { unit: "cloakraid".into(), team: 0, x: 3000.0, z: 4000.0, ..Default::default() },
+        ];
+        let script = write_script(&sc, "Qrow").unwrap();
+        let team0 = script.split("[TEAM0]").nth(1).unwrap().split("[TEAM1]").next().unwrap();
+        assert_eq!(value_of(team0, "start_x").as_deref(), Some("2000"), "{team0}");
+        assert_eq!(value_of(team0, "start_z").as_deref(), Some("3000"), "{team0}");
+
+        /* And a team with nothing at all lands in the middle, not in a corner.
+           Team 1 of the sample has no units of its own. */
+        let script = write_script(&sample(), "Qrow").unwrap();
+        let team1 = script.split("[TEAM1]").nth(1).unwrap().split("[ALLYTEAM").next().unwrap();
+        assert_eq!(value_of(team1, "start_x").as_deref(), Some("2048"), "{team1}");
+        assert_eq!(value_of(team1, "start_z").as_deref(), Some("2048"), "{team1}");
     }
 }
 
@@ -1602,6 +1790,12 @@ pub fn spsc_problems(game: tauri::State<'_, crate::launch::Game>, scenario: Scen
     let mut out = problems(&scenario);
     out.extend(install_problems(game, &scenario));
     out
+}
+
+/// What an author should know, for the panel under the blockers.
+#[tauri::command]
+pub fn spsc_warnings(scenario: Scenario) -> Vec<String> {
+    warnings(&scenario)
 }
 
 /// What is wrong with it that only this machine can answer.

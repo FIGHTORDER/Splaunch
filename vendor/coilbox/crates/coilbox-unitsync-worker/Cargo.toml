@@ -1,0 +1,71 @@
+[package]
+name = "coilbox-unitsync-worker"
+version = "0.0.0"
+description = "Out-of-process worker that dlopens an engine's libunitsync and dumps its map/game/archive data as JSON. Isolated from the app so a unitsync crash can't take it down."
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "coilbox-unitsync-worker"
+path = "src/main.rs"
+
+[dependencies]
+# Runtime dlopen of the engine's libunitsync.* (NOT a link-time dependency — the
+# library lives in the user's engine install, not in our build).
+libloading = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Minimap mode encodes the RGB565 buffer to PNG; archive preview also decodes
+# TGA (which browsers can't render) and re-encodes it to PNG. Game-header art is
+# decoded from any loadpicture format and re-encoded as a downscaled JPEG, so the
+# jpeg/bmp/gif decoders (and jpeg encoder) are enabled too. `tiff` is decoded
+# through `coilbox-texture` (issue #1915) and named here so the tests can write
+# one, which costs nothing: the same feature is already on in the graph.
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "tga",
+    "jpeg",
+    "bmp",
+    "gif",
+    "tiff",
+] }
+# DDS (DirectDraw Surface) decode for unit build pics, which are frequently
+# DXT/BCn-compressed, and the PNG encode every cache here writes. Shared with the
+# unit builder's Blender exports, which decode the same files (issue #715).
+coilbox-texture = { path = "../coilbox-texture" }
+base64 = "0.22"
+# The one WebP encoder, lossy and lossless (issue #1623). It wraps libwebp-sys,
+# which vendors libwebp's C and builds it with `cc`, so there is no system
+# library and no pkg-config, and all three release targets build it natively with
+# the toolchain they already have. The C stops here: this crate is a sidecar
+# binary, so the app never links it. `default-features = false` drops the crate's
+# optional `image` bridge, because `src/assetencode.rs` feeds libwebp raw
+# RGB/RGBA itself.
+webp = { version = "0.3.1", default-features = false }
+# Both asset hashes are sha256: the hub stores them as text and uses the encoded
+# one as the object path. Same version two other crates here already build.
+sha2 = { workspace = true }
+# The variant names, encode profiles and dimension caps the hub checks the
+# encoded bytes against. Read, never restated, so the encoder cannot drift from
+# what the hub will accept.
+coilbox-assets = { path = "../coilbox-assets" }
+# The catalog entry's shape and the version that names this extraction, so the
+# facts a map walk assembles cannot drift from what the hub's submission route
+# reads (issue #1732).
+coilbox-map-catalog = { path = "../coilbox-map-catalog" }
+# Skirmish-AI whitelist: a game's `validais.lua` lists AI name *patterns*, matched
+# as regexes against AI short names (skylobby-compatible `re-find` semantics).
+regex = "1"
+# Shared dependency-free on-disk byte cache: persist rendered minimap PNGs so they
+# aren't re-rendered every launch.
+coilbox-thumb-cache = { path = "../coilbox-thumb-cache" }
+# Model readers for `--unit-model`, so a game's own units can be viewed. Both are
+# dependency-free and read-only here.
+coilbox-s3o = { path = "../coilbox-s3o" }
+coilbox-3do = { path = "../coilbox-3do" }
+
+[dev-dependencies]
+# Stock Lua 5.1 used ONLY to unit-test the injected serializer + wrapper against a
+# faithful interpreter (the real test target, unitsync's LuaParser, needs a live
+# libunitsync and is exercised manually).
+mlua = { version = "0.11", features = ["lua51", "vendored"] }

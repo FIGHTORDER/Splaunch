@@ -1,9 +1,11 @@
 mod campaign;
+mod container;
 mod customkey;
 mod game;
 mod install;
 mod launch;
 mod maps;
+mod preset;
 mod scenario;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -20,6 +22,9 @@ pub fn run() {
             maps::sp_maps,
             scenario::spsc_script,
             scenario::spsc_problems,
+            scenario::spsc_warnings,
+            preset::spsc_import_preset,
+            preset::spsc_export_preset,
             scenario::spsc_test,
             scenario::spsc_save,
             scenario::spsc_open,

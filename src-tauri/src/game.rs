@@ -602,6 +602,16 @@ const BY_NAME: &[(&str, &str)] = &[
     ("damagesink", "Test and debug"),
 ];
 
+/// Whether Zero-K would call this unit a commander.
+///
+/// The compiler needs to know, because Zero-K spawns a team's commander itself
+/// rather than taking it from `extrastartunits` - so a placed commander says
+/// *where the team starts*, not what to spawn. Answered by the same rule the
+/// palette groups by, rather than by a second list that could drift from it.
+pub fn is_commander(name: &str) -> bool {
+    group_by_name(name) == "Commanders"
+}
+
 fn group_by_name(name: &str) -> &'static str {
     for (prefix, label) in BY_NAME {
         if name.starts_with(prefix) {

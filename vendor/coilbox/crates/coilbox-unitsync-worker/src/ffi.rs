@@ -1,0 +1,1930 @@
+//! Thin, runtime-loaded binding to the engine's `libunitsync` C ABI.
+//!
+//! unitsync is a global C singleton compiled into every engine install. We never
+//! link it: we `dlopen` the user's copy at runtime (`Unitsync::load`) and resolve
+//! the handful of symbols we need. A few symbols have drifted across engine
+//! versions, so the truly load-bearing ones are *required* (a missing one fails
+//! the load) and the rest are *optional* — resolved softly, their data simply
+//! omitted when absent.
+//!
+//! All `*const c_char` the library returns are library-owned: we copy into
+//! `String` via [`cstr`] and never free them. Stateful accessor sequences
+//! (count-then-iterate) are encapsulated as single methods so callers can't get
+//! the order wrong.
+
+use libloading::{Library, Symbol};
+use std::collections::BTreeMap;
+use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_float, c_int, c_uint};
+use std::path::Path;
+
+// --- C ABI signatures (reused across same-shaped symbols) -------------------
+
+type InitFn = unsafe extern "C" fn(bool, c_int) -> c_int;
+type VoidFn = unsafe extern "C" fn();
+type StrFn = unsafe extern "C" fn() -> *const c_char; // GetNextError, GetSpringVersion
+type CountFn = unsafe extern "C" fn() -> c_int; // GetMapCount, GetPrimaryModCount
+type StrByIntFn = unsafe extern "C" fn(c_int) -> *const c_char; // names, archive lists, info accessors
+type IntByIntFn = unsafe extern "C" fn(c_int) -> c_int; // archive/info counts by index
+type IntByStrFn = unsafe extern "C" fn(*const c_char) -> c_int; // GetMapArchiveCount(name)
+type FloatByIntFn = unsafe extern "C" fn(c_int) -> c_float; // GetOptionNumberDef(i)
+type StrByIntIntFn = unsafe extern "C" fn(c_int, c_int) -> *const c_char; // GetOptionListItemKey(i, j)
+type StrByStrFn = unsafe extern "C" fn(*const c_char) -> *const c_char; // GetArchivePath(name)
+type UintByStrFn = unsafe extern "C" fn(*const c_char) -> c_uint; // GetArchiveChecksum(name)
+type UintByIntFn = unsafe extern "C" fn(c_int) -> c_uint; // GetPrimaryModChecksum(index)
+type MinimapFn = unsafe extern "C" fn(*const c_char, c_int) -> *const u16; // GetMinimap(name, mip)
+                                                                           // GetInfoMapSize(mapName, infoType, *width, *height) -> nonzero on success.
+type InfoMapSizeFn =
+    unsafe extern "C" fn(*const c_char, *const c_char, *mut c_int, *mut c_int) -> c_int;
+// GetInfoMap(mapName, infoType, *data, typeHint) -> nonzero on success. `data`
+// is filled with width*height samples; for "height" they are raw 16-bit values.
+type InfoMapFn = unsafe extern "C" fn(*const c_char, *const c_char, *mut u8, c_int) -> c_int;
+// GetMapMinHeight(mapName) / GetMapMaxHeight(mapName) -> world height (float).
+type FloatByStrFn = unsafe extern "C" fn(*const c_char) -> c_float;
+type StrArgVoidFn = unsafe extern "C" fn(*const c_char); // AddAllArchives(name)
+type LpOpenFn = unsafe extern "C" fn(*const c_char, *const c_char, *const c_char) -> c_int; // lpOpenFile
+type IntByStrStrFn = unsafe extern "C" fn(*const c_char, *const c_char) -> c_int; // lpOpenSource(source, accessModes)
+type FloatByStrFloatFn = unsafe extern "C" fn(*const c_char, c_float) -> c_float; // lpGetStrKeyFloatVal, GetSpringConfigFloat
+type FloatByIntFloatFn = unsafe extern "C" fn(c_int, c_float) -> c_float; // lpGetIntKeyFloatVal(index, def)
+type StrByStrStrFn = unsafe extern "C" fn(*const c_char, *const c_char) -> *const c_char; // GetSpringConfigString
+type IntByStrIntFn = unsafe extern "C" fn(*const c_char, c_int) -> c_int; // GetSpringConfigInt
+type VoidByStrStrFn = unsafe extern "C" fn(*const c_char, *const c_char); // SetSpringConfigString(name, value)
+type VoidByStrIntFn = unsafe extern "C" fn(*const c_char, c_int); // SetSpringConfigInt(name, value)
+type VoidByStrFloatFn = unsafe extern "C" fn(*const c_char, c_float); // SetSpringConfigFloat(name, value)
+                                                                      // archive file access (VFS browsing): open/close an archive, iterate its members,
+                                                                      // and read individual member bytes.
+type VoidByIntFn = unsafe extern "C" fn(c_int); // CloseArchive(archive)
+type VoidByIntIntFn = unsafe extern "C" fn(c_int, c_int); // CloseArchiveFile(archive, file)
+type IntByIntIntFn = unsafe extern "C" fn(c_int, c_int) -> c_int; // SizeArchiveFile(archive, file)
+type OpenArchiveFileFn = unsafe extern "C" fn(c_int, *const c_char) -> c_int; // OpenArchiveFile(archive, name)
+type FindFilesFn = unsafe extern "C" fn(c_int, c_int, *mut c_char, *mut c_int) -> c_int; // FindFilesArchive
+type ReadFileFn = unsafe extern "C" fn(c_int, c_int, *mut u8, c_int) -> c_int; // ReadArchiveFile
+type FindFilesVfsFn = unsafe extern "C" fn(c_int, *mut c_char, c_int) -> c_int; // FindFilesVFS(idx, buf, size)
+
+/// A map's visual appearance, parsed from `mapinfo.lua` (see [`Unitsync::map_appearance`]).
+/// Colours are `[r, g, b]` in 0..1. Any field the map omits is `None`.
+#[derive(Default)]
+pub struct MapAppearance {
+    pub void_water: Option<bool>,
+    pub void_ground: Option<bool>,
+    pub void_alpha_min: Option<f32>,
+    pub water_color: Option<[f32; 3]>,
+    pub water_alpha: Option<f32>,
+    pub water_plane_color: Option<[f32; 3]>,
+    pub water_absorb: Option<[f32; 3]>,
+    pub water_base_color: Option<[f32; 3]>,
+    pub water_min_color: Option<[f32; 3]>,
+    pub force_rendering: Option<bool>,
+    pub sky_color: Option<[f32; 3]>,
+    pub fog_color: Option<[f32; 3]>,
+    pub cloud_color: Option<[f32; 3]>,
+    pub cloud_density: Option<f32>,
+    pub sun_dir: Option<[f32; 3]>,
+    pub sun_color: Option<[f32; 3]>,
+    pub ground_ambient_color: Option<[f32; 3]>,
+    pub ground_diffuse_color: Option<[f32; 3]>,
+    pub ground_specular_color: Option<[f32; 3]>,
+    pub ground_shadow_density: Option<f32>,
+}
+
+/// The raw four-field read-back from a REPL wrapper script (see
+/// [`Unitsync::run_lua_repl`] and [`crate::lua::wrap_chunks`]). Each field is
+/// rejoined from its chunks, and an empty one is normalized to `None`.
+pub struct LuaReplRaw {
+    pub result: Option<String>,
+    pub error: Option<String>,
+    /// The 1-based index (as a string) of a replayed chunk that failed, if any.
+    pub diverged: Option<String>,
+    pub prints: Option<String>,
+}
+
+/// Copy a library-owned C string into an owned `String`. Null -> `None`.
+pub(crate) unsafe fn cstr(p: *const c_char) -> Option<String> {
+    if p.is_null() {
+        None
+    } else {
+        Some(CStr::from_ptr(p).to_string_lossy().into_owned())
+    }
+}
+
+/// What unitsync writes into its string buffer instead of a value that does not
+/// fit in it (`GetStr` in `unitsync.cpp`, buffer size 100,000 bytes). It reads
+/// back like any other string, so anything that sees it must treat it as a lost
+/// value rather than data.
+const STRBUF_COMPLAINT: &str = "Increase STRBUF_SIZE";
+
+/// `Err` if `value` is unitsync's buffer complaint rather than the value asked
+/// for. `field` names the key that was read, so the message says what was lost.
+fn check_strbuf(value: &str, field: &str) -> Result<(), String> {
+    if value.starts_with(STRBUF_COMPLAINT) {
+        return Err(format!(
+            "unitsync could not return `{field}` because it does not fit in its \
+             100,000 byte string buffer ({value})"
+        ));
+    }
+    Ok(())
+}
+
+/// Join the `<prefix>1`..`<prefix>N` pieces [`crate::lua::CHUNKED_RESULT`]
+/// produced, reading each through `get`. A missing or complaint-filled piece is
+/// an error: silently joining what did arrive would hand back a plausible-looking
+/// but incomplete value, which is the failure this whole path exists to end.
+fn read_chunked_result(
+    prefix: &str,
+    n: usize,
+    mut get: impl FnMut(String) -> String,
+) -> Result<String, String> {
+    let mut out = String::new();
+    for i in 1..=n {
+        let field = format!("{prefix}{i}");
+        let part = get(field.clone());
+        check_strbuf(&part, &field)?;
+        if part.is_empty() {
+            return Err(format!(
+                "the Lua parser returned {} of {n} {prefix} chunks",
+                i - 1
+            ));
+        }
+        out.push_str(&part);
+    }
+    Ok(out)
+}
+
+/// Read one whole chunked field: its `<prefix>Chunks` count, then the pieces.
+/// A script that reports no count is broken rather than empty, so say so instead
+/// of handing back nothing.
+fn read_chunked_field(
+    prefix: &str,
+    mut get: impl FnMut(String) -> String,
+) -> Result<String, String> {
+    let count = get(format!("{prefix}Chunks"));
+    let n: usize = count.trim().parse().map_err(|_| {
+        format!("the Lua parser did not say how many {prefix} pieces it wrote (got {count:?})")
+    })?;
+    read_chunked_result(prefix, n, &mut get)
+}
+
+/// A loaded unitsync library plus its resolved entry points. The `Library` is
+/// kept alive in `_lib` so the copied function pointers stay valid.
+pub struct Unitsync {
+    _lib: Library,
+    init_fn: InitFn,
+    uninit_fn: VoidFn,
+    get_next_error_fn: StrFn,
+    get_spring_version_fn: Option<StrFn>,
+    // maps
+    map_count_fn: CountFn,
+    map_name_fn: StrByIntFn,
+    map_file_name_fn: Option<StrByIntFn>,
+    map_archive_count_fn: IntByStrFn,
+    map_archive_name_fn: StrByIntFn,
+    map_info_count_fn: Option<IntByIntFn>,
+    minimap_fn: Option<MinimapFn>,
+    info_map_size_fn: Option<InfoMapSizeFn>,
+    info_map_fn: Option<InfoMapFn>,
+    map_min_height_fn: Option<FloatByStrFn>,
+    map_max_height_fn: Option<FloatByStrFn>,
+    // games (primary mods)
+    mod_count_fn: CountFn,
+    mod_archive_fn: StrByIntFn,
+    mod_archive_count_fn: IntByIntFn,
+    mod_archive_list_fn: StrByIntFn,
+    mod_info_count_fn: IntByIntFn,
+    // info accessors (shared by maps/mods)
+    info_key_fn: StrByIntFn,
+    info_type_fn: Option<StrByIntFn>,
+    info_value_string_fn: StrByIntFn,
+    /// `GetInfoValueFloat` and `GetInfoValueInteger`, for the numeric map facts
+    /// `GetMapInfoCount` publishes beside the strings. Optional: an older build
+    /// may not have them, and the caller then has no number rather than a wrong
+    /// one.
+    info_value_float_fn: Option<FloatByIntFn>,
+    info_value_int_fn: Option<IntByIntFn>,
+    // optional archive metadata
+    archive_path_fn: Option<StrByStrFn>,
+    archive_checksum_fn: Option<UintByStrFn>,
+    mod_checksum_fn: Option<UintByIntFn>,
+    map_checksum_from_name_fn: Option<UintByStrFn>,
+    // optional archive file access (browse + read members through the VFS)
+    open_archive_fn: Option<IntByStrFn>,
+    close_archive_fn: Option<VoidByIntFn>,
+    init_dir_list_vfs_fn: Option<LpOpenFn>,
+    init_sub_dirs_vfs_fn: Option<LpOpenFn>,
+    find_files_vfs_fn: Option<FindFilesVfsFn>,
+    find_files_archive_fn: Option<FindFilesFn>,
+    open_archive_file_fn: Option<OpenArchiveFileFn>,
+    read_archive_file_fn: Option<ReadFileFn>,
+    close_archive_file_fn: Option<VoidByIntIntFn>,
+    size_archive_file_fn: Option<IntByIntIntFn>,
+    // sides / units (require a game's archives to be added first)
+    add_all_archives_fn: Option<StrArgVoidFn>,
+    remove_all_archives_fn: Option<VoidFn>,
+    side_count_fn: Option<CountFn>,
+    side_name_fn: Option<StrByIntFn>,
+    side_start_unit_fn: Option<StrByIntFn>,
+    process_units_fn: Option<CountFn>,
+    unit_count_fn: Option<CountFn>,
+    unit_name_fn: Option<StrByIntFn>,
+    full_unit_name_fn: Option<StrByIntFn>,
+    // skirmish AIs: native engine AIs + a mounted mod's Lua AIs (appended after)
+    skirmish_ai_count_fn: Option<CountFn>,
+    skirmish_ai_info_count_fn: Option<IntByIntFn>,
+    // options (map: by name; mod: current loaded game) + shared accessors
+    map_option_count_fn: Option<IntByStrFn>,
+    mod_option_count_fn: Option<CountFn>,
+    option_key_fn: Option<StrByIntFn>,
+    option_name_fn: Option<StrByIntFn>,
+    option_desc_fn: Option<StrByIntFn>,
+    option_section_fn: Option<StrByIntFn>,
+    // option typing + defaults (bool/number/list/string)
+    option_type_fn: Option<IntByIntFn>,
+    option_bool_def_fn: Option<IntByIntFn>,
+    option_number_def_fn: Option<FloatByIntFn>,
+    option_number_min_fn: Option<FloatByIntFn>,
+    option_number_max_fn: Option<FloatByIntFn>,
+    option_number_step_fn: Option<FloatByIntFn>,
+    option_string_def_fn: Option<StrByIntFn>,
+    option_list_count_fn: Option<IntByIntFn>,
+    option_list_def_fn: Option<StrByIntFn>,
+    option_list_item_key_fn: Option<StrByIntIntFn>,
+    option_list_item_name_fn: Option<StrByIntIntFn>,
+    // Lua parser (parse mapinfo.lua from the VFS for start positions)
+    lp_open_file_fn: Option<LpOpenFn>,
+    lp_execute_fn: Option<CountFn>,
+    lp_close_fn: Option<VoidFn>,
+    lp_root_table_fn: Option<CountFn>,
+    lp_sub_table_str_fn: Option<IntByStrFn>,
+    lp_sub_table_int_fn: Option<IntByIntFn>,
+    lp_pop_table_fn: Option<VoidFn>,
+    lp_int_key_list_count_fn: Option<CountFn>,
+    lp_int_key_list_entry_fn: Option<IntByIntFn>,
+    lp_str_key_float_val_fn: Option<FloatByStrFloatFn>,
+    lp_int_key_float_val_fn: Option<FloatByIntFloatFn>,
+    // lpGetStrKeyBoolVal(key, defValue) -> int; absent on some unitsync builds.
+    lp_str_key_bool_val_fn: Option<IntByStrIntFn>,
+    lp_open_source_fn: Option<IntByStrStrFn>,
+    lp_error_log_fn: Option<StrFn>,
+    lp_str_key_str_val_fn: Option<StrByStrStrFn>,
+    // engine configuration (springsettings.cfg, read by key)
+    set_spring_config_file_fn: Option<StrArgVoidFn>,
+    spring_config_string_fn: Option<StrByStrStrFn>,
+    spring_config_int_fn: Option<IntByStrIntFn>,
+    spring_config_float_fn: Option<FloatByStrFloatFn>,
+    set_spring_config_string_fn: Option<VoidByStrStrFn>,
+    set_spring_config_int_fn: Option<VoidByStrIntFn>,
+    set_spring_config_float_fn: Option<VoidByStrFloatFn>,
+    spring_config_file_fn: Option<StrFn>,
+}
+
+unsafe fn req<T: Copy>(lib: &Library, name: &[u8]) -> Result<T, String> {
+    let sym: Symbol<T> = lib.get(name).map_err(|e| {
+        let n = String::from_utf8_lossy(&name[..name.len().saturating_sub(1)]);
+        format!("missing required unitsync symbol {n}: {e}")
+    })?;
+    Ok(*sym)
+}
+
+unsafe fn opt<T: Copy>(lib: &Library, name: &[u8]) -> Option<T> {
+    lib.get::<T>(name).ok().map(|s| *s)
+}
+
+/// unitsync `BitmapType::bm_grayscale_16` — request the native 16-bit height
+/// infomap so `GetInfoMap` copies raw values rather than down-converting to 8-bit.
+const BM_GRAYSCALE_16: c_int = 2;
+
+/// unitsync `BitmapType::bm_grayscale_8` — the metal infomap is one byte per pixel
+/// (metal density 0..255), so it's read at 8-bit.
+const BM_GRAYSCALE_8: c_int = 1;
+
+impl Unitsync {
+    /// `dlopen` the library at `libpath` and resolve every entry point. Loading
+    /// by absolute path lets the dynamic loader resolve the library's own
+    /// `@loader_path`/`@rpath`-relative dependencies from the engine dir.
+    pub unsafe fn load(libpath: &Path) -> Result<Self, String> {
+        let lib = Library::new(libpath)
+            .map_err(|e| format!("failed to load {}: {e}", libpath.display()))?;
+        let us = Unitsync {
+            init_fn: req(&lib, b"Init\0")?,
+            uninit_fn: req(&lib, b"UnInit\0")?,
+            get_next_error_fn: req(&lib, b"GetNextError\0")?,
+            get_spring_version_fn: opt(&lib, b"GetSpringVersion\0"),
+            map_count_fn: req(&lib, b"GetMapCount\0")?,
+            map_name_fn: req(&lib, b"GetMapName\0")?,
+            map_file_name_fn: opt(&lib, b"GetMapFileName\0"),
+            map_archive_count_fn: req(&lib, b"GetMapArchiveCount\0")?,
+            map_archive_name_fn: req(&lib, b"GetMapArchiveName\0")?,
+            map_info_count_fn: opt(&lib, b"GetMapInfoCount\0"),
+            minimap_fn: opt(&lib, b"GetMinimap\0"),
+            info_map_size_fn: opt(&lib, b"GetInfoMapSize\0"),
+            info_map_fn: opt(&lib, b"GetInfoMap\0"),
+            map_min_height_fn: opt(&lib, b"GetMapMinHeight\0"),
+            map_max_height_fn: opt(&lib, b"GetMapMaxHeight\0"),
+            mod_count_fn: req(&lib, b"GetPrimaryModCount\0")?,
+            mod_archive_fn: req(&lib, b"GetPrimaryModArchive\0")?,
+            mod_archive_count_fn: req(&lib, b"GetPrimaryModArchiveCount\0")?,
+            mod_archive_list_fn: req(&lib, b"GetPrimaryModArchiveList\0")?,
+            mod_info_count_fn: req(&lib, b"GetPrimaryModInfoCount\0")?,
+            info_key_fn: req(&lib, b"GetInfoKey\0")?,
+            info_type_fn: opt(&lib, b"GetInfoType\0"),
+            info_value_string_fn: req(&lib, b"GetInfoValueString\0")?,
+            info_value_float_fn: opt(&lib, b"GetInfoValueFloat\0"),
+            info_value_int_fn: opt(&lib, b"GetInfoValueInteger\0"),
+            archive_path_fn: opt(&lib, b"GetArchivePath\0"),
+            archive_checksum_fn: opt(&lib, b"GetArchiveChecksum\0"),
+            mod_checksum_fn: opt(&lib, b"GetPrimaryModChecksum\0"),
+            map_checksum_from_name_fn: opt(&lib, b"GetMapChecksumFromName\0"),
+            open_archive_fn: opt(&lib, b"OpenArchive\0"),
+            close_archive_fn: opt(&lib, b"CloseArchive\0"),
+            init_dir_list_vfs_fn: opt(&lib, b"InitDirListVFS\0"),
+            init_sub_dirs_vfs_fn: opt(&lib, b"InitSubDirsVFS\0"),
+            find_files_vfs_fn: opt(&lib, b"FindFilesVFS\0"),
+            find_files_archive_fn: opt(&lib, b"FindFilesArchive\0"),
+            open_archive_file_fn: opt(&lib, b"OpenArchiveFile\0"),
+            read_archive_file_fn: opt(&lib, b"ReadArchiveFile\0"),
+            close_archive_file_fn: opt(&lib, b"CloseArchiveFile\0"),
+            size_archive_file_fn: opt(&lib, b"SizeArchiveFile\0"),
+            add_all_archives_fn: opt(&lib, b"AddAllArchives\0"),
+            remove_all_archives_fn: opt(&lib, b"RemoveAllArchives\0"),
+            side_count_fn: opt(&lib, b"GetSideCount\0"),
+            side_name_fn: opt(&lib, b"GetSideName\0"),
+            side_start_unit_fn: opt(&lib, b"GetSideStartUnit\0"),
+            process_units_fn: opt(&lib, b"ProcessUnits\0"),
+            unit_count_fn: opt(&lib, b"GetUnitCount\0"),
+            unit_name_fn: opt(&lib, b"GetUnitName\0"),
+            full_unit_name_fn: opt(&lib, b"GetFullUnitName\0"),
+            skirmish_ai_count_fn: opt(&lib, b"GetSkirmishAICount\0"),
+            skirmish_ai_info_count_fn: opt(&lib, b"GetSkirmishAIInfoCount\0"),
+            map_option_count_fn: opt(&lib, b"GetMapOptionCount\0"),
+            mod_option_count_fn: opt(&lib, b"GetModOptionCount\0"),
+            option_key_fn: opt(&lib, b"GetOptionKey\0"),
+            option_name_fn: opt(&lib, b"GetOptionName\0"),
+            option_desc_fn: opt(&lib, b"GetOptionDesc\0"),
+            option_section_fn: opt(&lib, b"GetOptionSection\0"),
+            option_type_fn: opt(&lib, b"GetOptionType\0"),
+            option_bool_def_fn: opt(&lib, b"GetOptionBoolDef\0"),
+            option_number_def_fn: opt(&lib, b"GetOptionNumberDef\0"),
+            option_number_min_fn: opt(&lib, b"GetOptionNumberMin\0"),
+            option_number_max_fn: opt(&lib, b"GetOptionNumberMax\0"),
+            option_number_step_fn: opt(&lib, b"GetOptionNumberStep\0"),
+            option_string_def_fn: opt(&lib, b"GetOptionStringDef\0"),
+            option_list_count_fn: opt(&lib, b"GetOptionListCount\0"),
+            option_list_def_fn: opt(&lib, b"GetOptionListDef\0"),
+            option_list_item_key_fn: opt(&lib, b"GetOptionListItemKey\0"),
+            option_list_item_name_fn: opt(&lib, b"GetOptionListItemName\0"),
+            lp_open_file_fn: opt(&lib, b"lpOpenFile\0"),
+            lp_execute_fn: opt(&lib, b"lpExecute\0"),
+            lp_close_fn: opt(&lib, b"lpClose\0"),
+            lp_root_table_fn: opt(&lib, b"lpRootTable\0"),
+            lp_sub_table_str_fn: opt(&lib, b"lpSubTableStr\0"),
+            lp_sub_table_int_fn: opt(&lib, b"lpSubTableInt\0"),
+            lp_pop_table_fn: opt(&lib, b"lpPopTable\0"),
+            lp_int_key_list_count_fn: opt(&lib, b"lpGetIntKeyListCount\0"),
+            lp_int_key_list_entry_fn: opt(&lib, b"lpGetIntKeyListEntry\0"),
+            lp_str_key_float_val_fn: opt(&lib, b"lpGetStrKeyFloatVal\0"),
+            lp_int_key_float_val_fn: opt(&lib, b"lpGetIntKeyFloatVal\0"),
+            lp_str_key_bool_val_fn: opt(&lib, b"lpGetStrKeyBoolVal\0"),
+            lp_open_source_fn: opt(&lib, b"lpOpenSource\0"),
+            lp_error_log_fn: opt(&lib, b"lpErrorLog\0"),
+            lp_str_key_str_val_fn: opt(&lib, b"lpGetStrKeyStrVal\0"),
+            set_spring_config_file_fn: opt(&lib, b"SetSpringConfigFile\0"),
+            spring_config_string_fn: opt(&lib, b"GetSpringConfigString\0"),
+            spring_config_int_fn: opt(&lib, b"GetSpringConfigInt\0"),
+            spring_config_float_fn: opt(&lib, b"GetSpringConfigFloat\0"),
+            set_spring_config_string_fn: opt(&lib, b"SetSpringConfigString\0"),
+            set_spring_config_int_fn: opt(&lib, b"SetSpringConfigInt\0"),
+            set_spring_config_float_fn: opt(&lib, b"SetSpringConfigFloat\0"),
+            spring_config_file_fn: opt(&lib, b"GetSpringConfigFile\0"),
+            _lib: lib,
+        };
+        Ok(us)
+    }
+
+    /// `Init(isServer, id)` — returns nonzero on success. Must be called before
+    /// any enumeration.
+    pub fn init(&self, is_server: bool, id: i32) -> i32 {
+        unsafe { (self.init_fn)(is_server, id) }
+    }
+
+    pub fn uninit(&self) {
+        unsafe { (self.uninit_fn)() }
+    }
+
+    /// Drain the asynchronous error queue (call `GetNextError` until it returns
+    /// null/empty).
+    pub fn drain_errors(&self) -> Vec<String> {
+        let mut errs = Vec::new();
+        loop {
+            match unsafe { cstr((self.get_next_error_fn)()) } {
+                Some(s) if !s.is_empty() => errs.push(s),
+                _ => break,
+            }
+        }
+        errs
+    }
+
+    pub fn spring_version(&self) -> Option<String> {
+        let f = self.get_spring_version_fn?;
+        unsafe { cstr(f()) }.filter(|s| !s.is_empty())
+    }
+
+    // ---- maps --------------------------------------------------------------
+
+    pub fn map_count(&self) -> i32 {
+        unsafe { (self.map_count_fn)() }
+    }
+
+    pub fn map_name(&self, i: i32) -> Option<String> {
+        unsafe { cstr((self.map_name_fn)(i)) }
+    }
+
+    pub fn map_file_name(&self, i: i32) -> Option<String> {
+        let f = self.map_file_name_fn?;
+        unsafe { cstr(f(i)) }.filter(|s| !s.is_empty())
+    }
+
+    /// Archives backing a map. `GetMapArchiveCount(name)` populates the internal
+    /// list that `GetMapArchiveName(i)` then reads, so this does both in order.
+    pub fn map_archives(&self, map_name: &str) -> Vec<String> {
+        let Ok(cname) = CString::new(map_name) else {
+            return Vec::new();
+        };
+        let count = unsafe { (self.map_archive_count_fn)(cname.as_ptr()) };
+        (0..count)
+            .filter_map(|i| unsafe { cstr((self.map_archive_name_fn)(i)) })
+            .collect()
+    }
+
+    // ---- games (primary mods) ---------------------------------------------
+
+    pub fn mod_count(&self) -> i32 {
+        unsafe { (self.mod_count_fn)() }
+    }
+
+    /// The game's own archive filename (the *primary* archive).
+    pub fn mod_archive(&self, i: i32) -> Option<String> {
+        unsafe { cstr((self.mod_archive_fn)(i)) }
+    }
+
+    /// The full archive list for a game (its primary archive plus every
+    /// dependency). `GetPrimaryModArchiveCount(i)` loads the list, then
+    /// `GetPrimaryModArchiveList(j)` reads each entry.
+    pub fn mod_archives(&self, i: i32) -> Vec<String> {
+        let count = unsafe { (self.mod_archive_count_fn)(i) };
+        (0..count)
+            .filter_map(|j| unsafe { cstr((self.mod_archive_list_fn)(j)) })
+            .collect()
+    }
+
+    /// Read `count` already-loaded info entries via the shared `GetInfo*`
+    /// accessors. Only string-typed entries are read — that covers every field we
+    /// display and avoids asserting on typed getters that some builds handle
+    /// differently. The caller must have loaded the block first (e.g. via
+    /// `GetPrimaryModInfoCount` / `GetMapInfoCount`).
+    fn read_info(&self, count: i32) -> BTreeMap<String, String> {
+        let mut info = BTreeMap::new();
+        for k in 0..count {
+            let Some(key) = (unsafe { cstr((self.info_key_fn)(k)) }) else {
+                continue;
+            };
+            let is_string = match self.info_type_fn {
+                Some(f) => unsafe { cstr(f(k)) }.map(|t| t == "string").unwrap_or(true),
+                None => true,
+            };
+            if !is_string {
+                continue;
+            }
+            if let Some(v) = unsafe { cstr((self.info_value_string_fn)(k)) } {
+                info.insert(key, v);
+            }
+        }
+        info
+    }
+
+    /// Key/value metadata for a game (name, shortname, version, description, ...).
+    pub fn mod_info(&self, i: i32) -> BTreeMap<String, String> {
+        let count = unsafe { (self.mod_info_count_fn)(i) };
+        self.read_info(count)
+    }
+
+    /// One numeric fact out of a map's info block, by key.
+    ///
+    /// `GetMapInfoCount` publishes `maxMetal`, `extractorRadius`,
+    /// `tidalStrength`, `gravity`, the wind range and the map's size beside the
+    /// two strings [`Self::map_info`] reads. None of those is a string, which is
+    /// why they are absent from that map, and they are not all one type either:
+    /// unitsync's own `InternalMapInfo` holds `maxMetal` as a float and every
+    /// other one as an int, so this asks what each is before reading it. Reading
+    /// an int through the float accessor answers 0 rather than failing, which is
+    /// the shape of mistake that looks like a fact.
+    ///
+    /// Worth reading rather than `mapinfo.lua` when a map may not have one: the
+    /// engine synthesises this block for an SMD era map out of its `.smd`. The
+    /// cost is precision, since the ints here are the engine's rounding of what
+    /// the map declared.
+    ///
+    /// Kept out of [`Self::map_info`] on purpose: that map is displayed as the
+    /// map's tags, and dropping nine numbers into it would put nine chips on
+    /// every map card.
+    pub fn map_number(&self, i: i32, key: &str) -> Option<f32> {
+        let count_fn = self.map_info_count_fn?;
+        let count = unsafe { count_fn(i) };
+        for k in 0..count {
+            let Some(found) = (unsafe { cstr((self.info_key_fn)(k)) }) else {
+                continue;
+            };
+            if found != key {
+                continue;
+            }
+            let kind = self
+                .info_type_fn
+                .and_then(|f| unsafe { cstr(f(k)) })
+                .unwrap_or_default();
+            return match kind.as_str() {
+                "float" => self.info_value_float_fn.map(|f| unsafe { f(k) }),
+                "integer" => self.info_value_int_fn.map(|f| unsafe { f(k) } as f32),
+                _ => None,
+            };
+        }
+        None
+    }
+
+    /// Key/value metadata for a map (description, author, dimensions, ...), when
+    /// the engine build exposes `GetMapInfoCount`.
+    pub fn map_info(&self, i: i32) -> BTreeMap<String, String> {
+        match self.map_info_count_fn {
+            Some(f) => self.read_info(unsafe { f(i) }),
+            None => BTreeMap::new(),
+        }
+    }
+
+    /// The map's proportions as `(width, height)`. unitsync's minimap is always a
+    /// square texture (the map sampled into 1024x1024), so the real aspect ratio
+    /// is needed to display it undistorted. The metal infomap's dimensions are
+    /// proportional to the map, so their ratio is the map's aspect ratio.
+    pub fn map_dimensions(&self, map_name: &str) -> Option<(u32, u32)> {
+        let f = self.info_map_size_fn?;
+        let name = CString::new(map_name).ok()?;
+        let which = CString::new("metal").ok()?;
+        let mut w: c_int = 0;
+        let mut h: c_int = 0;
+        let ok = unsafe { f(name.as_ptr(), which.as_ptr(), &mut w, &mut h) };
+        (ok != 0 && w > 0 && h > 0).then_some((w as u32, h as u32))
+    }
+
+    /// Dimensions of the map's full-resolution height infomap, `(mapx+1, mapy+1)`.
+    /// Cheap (no pixel read) — call before `heightmap_data` so a cache hit can skip
+    /// the heavy read entirely. `None` if the build lacks `GetInfoMapSize` or the
+    /// map has no height infomap.
+    pub fn heightmap_size(&self, map_name: &str) -> Option<(u32, u32)> {
+        let f = self.info_map_size_fn?;
+        let name = CString::new(map_name).ok()?;
+        let which = CString::new("height").ok()?;
+        let mut w: c_int = 0;
+        let mut h: c_int = 0;
+        let ok = unsafe { f(name.as_ptr(), which.as_ptr(), &mut w, &mut h) };
+        (ok != 0 && w > 0 && h > 0).then_some((w as u32, h as u32))
+    }
+
+    /// The map's full-resolution heightmap as raw 16-bit values (`w*h` long, row
+    /// major). Values are the stored SMF heightmap (0..65535), spanning
+    /// `min_height`..`max_height` in world units. `w`/`h` must come from
+    /// `heightmap_size`. `None` if the build lacks `GetInfoMap` or the read fails.
+    pub fn heightmap_data(&self, map_name: &str, w: u32, h: u32) -> Option<Vec<u16>> {
+        let f = self.info_map_fn?;
+        let name = CString::new(map_name).ok()?;
+        let which = CString::new("height").ok()?;
+        let mut buf = vec![0u16; (w as usize) * (h as usize)];
+        let got = unsafe {
+            f(
+                name.as_ptr(),
+                which.as_ptr(),
+                buf.as_mut_ptr() as *mut u8,
+                BM_GRAYSCALE_16,
+            )
+        };
+        (got != 0).then_some(buf)
+    }
+
+    /// The map's metal infomap as raw 8-bit density values (`w*h` long, row major,
+    /// 0..255). `w`/`h` must come from `map_dimensions` (which reads `GetInfoMapSize
+    /// "metal"`). `None` if the build lacks `GetInfoMap` or the read fails.
+    pub fn metalmap_data(&self, map_name: &str, w: u32, h: u32) -> Option<Vec<u8>> {
+        let f = self.info_map_fn?;
+        let name = CString::new(map_name).ok()?;
+        let which = CString::new("metal").ok()?;
+        let mut buf = vec![0u8; (w as usize) * (h as usize)];
+        let got = unsafe {
+            f(
+                name.as_ptr(),
+                which.as_ptr(),
+                buf.as_mut_ptr(),
+                BM_GRAYSCALE_8,
+            )
+        };
+        (got != 0).then_some(buf)
+    }
+
+    /// Dimensions of the map's terrain-type infomap, `(mapx/2, mapy/2)`, which is
+    /// the same grid the metal infomap is on. The engine spells it out as its own
+    /// case rather than sharing metal's (`CSMFMapFile::GetInfoMapSize`). Cheap (no
+    /// pixel read). `None` if the build lacks `GetInfoMapSize` or the map has no
+    /// type infomap.
+    pub fn typemap_size(&self, map_name: &str) -> Option<(u32, u32)> {
+        let f = self.info_map_size_fn?;
+        let name = CString::new(map_name).ok()?;
+        let which = CString::new("type").ok()?;
+        let mut w: c_int = 0;
+        let mut h: c_int = 0;
+        let ok = unsafe { f(name.as_ptr(), which.as_ptr(), &mut w, &mut h) };
+        (ok != 0 && w > 0 && h > 0).then_some((w as u32, h as u32))
+    }
+
+    /// The map's terrain-type infomap as raw 8-bit type indices (`w*h` long, row
+    /// major). Each sample indexes the map's `mapinfo.lua` terrain type list,
+    /// which is what decides speed, hardness and buildability at that square, so
+    /// the values are labels rather than an amount. `w`/`h` must come from
+    /// `typemap_size`. `None` if the build lacks `GetInfoMap` or the read fails.
+    pub fn typemap_data(&self, map_name: &str, w: u32, h: u32) -> Option<Vec<u8>> {
+        let f = self.info_map_fn?;
+        let name = CString::new(map_name).ok()?;
+        let which = CString::new("type").ok()?;
+        let mut buf = vec![0u8; (w as usize) * (h as usize)];
+        let got = unsafe {
+            f(
+                name.as_ptr(),
+                which.as_ptr(),
+                buf.as_mut_ptr(),
+                BM_GRAYSCALE_8,
+            )
+        };
+        (got != 0).then_some(buf)
+    }
+
+    /// The map's `(min_height, max_height)` in world units (the heights at height
+    /// infomap values 0 and 65535), honouring any `mapinfo.lua` `smf` override.
+    /// `None` if the build lacks the accessors.
+    pub fn height_bounds(&self, map_name: &str) -> Option<(f32, f32)> {
+        let (min_f, max_f) = (self.map_min_height_fn?, self.map_max_height_fn?);
+        let name = CString::new(map_name).ok()?;
+        let lo = unsafe { min_f(name.as_ptr()) };
+        let hi = unsafe { max_f(name.as_ptr()) };
+        Some((lo, hi))
+    }
+
+    /// The map's minimap as a raw RGB565 buffer (`side x side`, where
+    /// `side = 1024 >> mip`). `None` if the build lacks `GetMinimap` or the map
+    /// has none. The returned buffer is library-owned and copied out immediately.
+    pub fn minimap(&self, map_name: &str, mip: i32) -> Option<Vec<u16>> {
+        let f = self.minimap_fn?;
+        let c = CString::new(map_name).ok()?;
+        let ptr = unsafe { f(c.as_ptr(), mip) };
+        if ptr.is_null() {
+            return None;
+        }
+        let side = 1024usize >> mip.clamp(0, 10);
+        let len = side * side;
+        Some(unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec())
+    }
+
+    // ---- optional archive metadata ----------------------------------------
+
+    pub fn archive_path(&self, name: &str) -> Option<String> {
+        let f = self.archive_path_fn?;
+        let c = CString::new(name).ok()?;
+        unsafe { cstr(f(c.as_ptr())) }.filter(|s| !s.is_empty())
+    }
+
+    pub fn archive_checksum(&self, name: &str) -> Option<u32> {
+        let f = self.archive_checksum_fn?;
+        let c = CString::new(name).ok()?;
+        Some(unsafe { f(c.as_ptr()) })
+    }
+
+    /// Sync checksum for a game (primary mod) by its index (`GetPrimaryModChecksum`).
+    /// Unlike `archive_checksum` (a single archive) this hashes the mod archive
+    /// plus all its dependencies — the value joiners verify against — and is the
+    /// checksum lobbies expect in OPENBATTLE. `None` if the build lacks the symbol.
+    pub fn mod_checksum(&self, index: i32) -> Option<u32> {
+        let f = self.mod_checksum_fn?;
+        Some(unsafe { f(index) })
+    }
+
+    /// Sync checksum for a map by name (`GetMapChecksumFromName`). This SHA512-
+    /// hashes the whole archive plus its dependencies, so it's costly — callers
+    /// should only use it lazily (map detail), never during enumeration.
+    pub fn map_checksum_from_name(&self, name: &str) -> Option<u32> {
+        let f = self.map_checksum_from_name_fn?;
+        let c = CString::new(name).ok()?;
+        Some(unsafe { f(c.as_ptr()) })
+    }
+
+    // ---- archive file access (browse + read members) ----------------------
+
+    /// Open an archive in the VFS by its name (`*.sd7`/`*.sdz`/`*.sdd`, or a
+    /// rapid `*.sdp`). Returns its handle, or `None` if the build lacks the
+    /// symbol or the open failed (a zero handle means error).
+    pub fn open_archive(&self, name: &str) -> Option<i32> {
+        let f = self.open_archive_fn?;
+        let c = CString::new(name).ok()?;
+        let h = unsafe { f(c.as_ptr()) };
+        (h != 0).then_some(h)
+    }
+
+    /// Enumerate VFS file-paths under `path` matching `pattern`, restricted to the
+    /// archive `modes` (VFSModes.h: "r" raw, "M" mod, "m" map, "b" base). Mirrors
+    /// the engine's contract: InitDirListVFS returns 0/-1 (success/error) and fills
+    /// an internal list; FindFilesVFS(idx) copies entry `idx` and returns `idx+1`,
+    /// or 0 once `idx` is past the end. So iterate from index 0.
+    pub fn list_vfs_dir(&self, path: &str, pattern: &str, modes: &str) -> Vec<String> {
+        self.enumerate_vfs(self.init_dir_list_vfs_fn, path, pattern, modes)
+    }
+
+    /// The directories directly under `path`, which the file listing above never
+    /// returns: the engine's raw listing asks for files and leaves folders out
+    /// (`FileHandler.cpp`, `InsertRawFiles`).
+    ///
+    /// A `.sdd` is a folder, so this is the only way to see one. Same iteration
+    /// contract as [`Unitsync::list_vfs_dir`], through `InitSubDirsVFS`.
+    pub fn list_vfs_subdirs(&self, path: &str, pattern: &str, modes: &str) -> Vec<String> {
+        self.enumerate_vfs(self.init_sub_dirs_vfs_fn, path, pattern, modes)
+    }
+
+    /// The iteration both listings share, once the engine has been told what to
+    /// put in its internal list.
+    fn enumerate_vfs(
+        &self,
+        init: Option<LpOpenFn>,
+        path: &str,
+        pattern: &str,
+        modes: &str,
+    ) -> Vec<String> {
+        let (Some(init), Some(find)) = (init, self.find_files_vfs_fn) else {
+            return Vec::new();
+        };
+        let (Ok(cp), Ok(cpat), Ok(cm)) = (
+            CString::new(path),
+            CString::new(pattern),
+            CString::new(modes),
+        ) else {
+            return Vec::new();
+        };
+        if unsafe { init(cp.as_ptr(), cpat.as_ptr(), cm.as_ptr()) } < 0 {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let mut buf = vec![0u8; 4096];
+        let mut idx: c_int = 0;
+        loop {
+            let next = unsafe { find(idx, buf.as_mut_ptr() as *mut c_char, buf.len() as c_int) };
+            if next == 0 {
+                break;
+            }
+            if let Some(name) = unsafe { cstr(buf.as_ptr() as *const c_char) } {
+                if !name.is_empty() {
+                    out.push(name);
+                }
+            }
+            idx = next;
+            if out.len() >= 200_000 {
+                break;
+            }
+        }
+        out
+    }
+
+    pub fn close_archive(&self, archive: i32) {
+        if let Some(f) = self.close_archive_fn {
+            unsafe { f(archive) }
+        }
+    }
+
+    /// List every member of an opened archive as `(path, size)`. Walks the
+    /// engine's cursor idiom: `FindFilesArchive(archive, cur, buf, &size)` fills
+    /// `buf` with the entry at `cur` and returns `cur + 1`, returning `0` once
+    /// `cur` is past the end (filling nothing) — so we break on `0` before
+    /// reading. `size` is in/out: on input it must hold `buf`'s capacity (the
+    /// engine refuses to copy a name that doesn't fit, setting "name-buffer is
+    /// too small" and returning `0`); on output it holds the member's byte size,
+    /// so it must be reset to the buffer length before every call.
+    pub fn list_archive_files(&self, archive: i32) -> Vec<(String, u64)> {
+        let Some(find) = self.find_files_archive_fn else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut buf = vec![0u8; 4096];
+        let mut cur: c_int = 0;
+        loop {
+            let mut size: c_int = buf.len() as c_int;
+            let next = unsafe { find(archive, cur, buf.as_mut_ptr() as *mut c_char, &mut size) };
+            if next <= 0 {
+                break;
+            }
+            if let Some(name) = unsafe { cstr(buf.as_ptr() as *const c_char) } {
+                if !name.is_empty() {
+                    out.push((name, size.max(0) as u64));
+                }
+            }
+            cur = next;
+            // Safety stop against a misbehaving build that never returns 0.
+            if out.len() >= 200_000 {
+                break;
+            }
+        }
+        out
+    }
+
+    /// Read a member of an opened archive, capped at `cap` bytes. Returns the
+    /// member's real size and the (possibly truncated) bytes, or `None` if the
+    /// build lacks the symbols or the member can't be opened.
+    pub fn read_archive_member(
+        &self,
+        archive: i32,
+        inner: &str,
+        cap: usize,
+    ) -> Option<(u64, Vec<u8>)> {
+        let open = self.open_archive_file_fn?;
+        let size_fn = self.size_archive_file_fn?;
+        let read = self.read_archive_file_fn?;
+        let c = CString::new(inner).ok()?;
+        let fh = unsafe { open(archive, c.as_ptr()) };
+        if fh < 0 {
+            return None;
+        }
+        let real = unsafe { size_fn(archive, fh) }.max(0) as u64;
+        let to_read = (real as usize).min(cap);
+        let mut buf = vec![0u8; to_read];
+        let mut got = 0usize;
+        if to_read > 0 {
+            let n = unsafe { read(archive, fh, buf.as_mut_ptr(), to_read as c_int) };
+            if n > 0 {
+                got = (n as usize).min(to_read);
+            }
+        }
+        buf.truncate(got);
+        if let Some(close) = self.close_archive_file_fn {
+            unsafe { close(archive, fh) }
+        }
+        Some((real, buf))
+    }
+
+    // ---- sides / units (after a game's archives are added) ----------------
+
+    /// Load a game's archive set (its primary archive plus dependencies) into the
+    /// VFS so its sides/units become queryable. Returns false if unsupported.
+    pub fn add_all_archives(&self, archive: &str) -> bool {
+        let (Some(f), Ok(c)) = (self.add_all_archives_fn, CString::new(archive)) else {
+            return false;
+        };
+        unsafe { f(c.as_ptr()) };
+        true
+    }
+
+    /// Reset the VFS to just the base archives (undo `add_all_archives`).
+    pub fn remove_all_archives(&self) {
+        if let Some(f) = self.remove_all_archives_fn {
+            unsafe { f() }
+        }
+    }
+
+    pub fn side_count(&self) -> i32 {
+        self.side_count_fn.map(|f| unsafe { f() }).unwrap_or(0)
+    }
+
+    pub fn side_name(&self, i: i32) -> Option<String> {
+        self.side_name_fn
+            .and_then(|f| unsafe { cstr(f(i)) })
+            .filter(|s| !s.is_empty())
+    }
+
+    pub fn side_start_unit(&self, i: i32) -> Option<String> {
+        self.side_start_unit_fn
+            .and_then(|f| unsafe { cstr(f(i)) })
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Process unit defs (call until it returns 0) before unit queries.
+    pub fn process_units(&self) -> i32 {
+        self.process_units_fn.map(|f| unsafe { f() }).unwrap_or(0)
+    }
+
+    pub fn unit_count(&self) -> i32 {
+        self.unit_count_fn.map(|f| unsafe { f() }).unwrap_or(0)
+    }
+
+    pub fn unit_name(&self, i: i32) -> Option<String> {
+        self.unit_name_fn.and_then(|f| unsafe { cstr(f(i)) })
+    }
+
+    pub fn full_unit_name(&self, i: i32) -> Option<String> {
+        self.full_unit_name_fn
+            .and_then(|f| unsafe { cstr(f(i)) })
+            .filter(|s| !s.is_empty())
+    }
+
+    // ---- skirmish AIs -----------------------------------------------------
+
+    /// Number of skirmish AIs unitsync currently sees: native AIs from the
+    /// engine's AI data dirs, plus any Lua AIs from a mounted mod (appended
+    /// after the natives). 0 if the build lacks `GetSkirmishAICount`.
+    pub fn skirmish_ai_count(&self) -> i32 {
+        self.skirmish_ai_count_fn
+            .map(|f| unsafe { f() })
+            .unwrap_or(0)
+    }
+
+    /// Info block for skirmish AI `i` (`shortName`, `version`, `name`,
+    /// `description`), read via the shared `GetInfo*` accessors that
+    /// `GetSkirmishAIInfoCount(i)` populates. Empty if unsupported.
+    pub fn skirmish_ai_info(&self, i: i32) -> BTreeMap<String, String> {
+        match self.skirmish_ai_info_count_fn {
+            Some(f) => self.read_info(unsafe { f(i) }),
+            None => BTreeMap::new(),
+        }
+    }
+
+    // ---- options ----------------------------------------------------------
+    //
+    // The `GetOption*` accessors read a global table populated by the most recent
+    // `GetMapOptionCount` / `GetModOptionCount` call, so read them right after.
+
+    pub fn map_option_count(&self, map_name: &str) -> i32 {
+        let (Some(f), Ok(c)) = (self.map_option_count_fn, CString::new(map_name)) else {
+            return 0;
+        };
+        unsafe { f(c.as_ptr()) }
+    }
+
+    pub fn mod_option_count(&self) -> i32 {
+        self.mod_option_count_fn
+            .map(|f| unsafe { f() })
+            .unwrap_or(0)
+    }
+
+    pub fn option_key(&self, i: i32) -> Option<String> {
+        self.option_key_fn
+            .and_then(|f| unsafe { cstr(f(i)) })
+            .filter(|s| !s.is_empty())
+    }
+
+    pub fn option_name(&self, i: i32) -> Option<String> {
+        self.option_name_fn
+            .and_then(|f| unsafe { cstr(f(i)) })
+            .filter(|s| !s.is_empty())
+    }
+
+    pub fn option_desc(&self, i: i32) -> Option<String> {
+        self.option_desc_fn
+            .and_then(|f| unsafe { cstr(f(i)) })
+            .filter(|s| !s.is_empty())
+    }
+
+    /// The key of the section an option belongs to, empty when it is top-level.
+    /// Sections are themselves options (type 5), so this is how the flat option
+    /// list encodes its grouping.
+    pub fn option_section(&self, i: i32) -> Option<String> {
+        self.option_section_fn
+            .and_then(|f| unsafe { cstr(f(i)) })
+            .filter(|s| !s.is_empty())
+    }
+
+    /// unitsync option type code: 1 bool, 2 list, 3 number, 4 string, 5 section
+    /// (0 unknown).
+    pub fn option_type(&self, i: i32) -> i32 {
+        self.option_type_fn.map(|f| unsafe { f(i) }).unwrap_or(0)
+    }
+
+    pub fn option_bool_def(&self, i: i32) -> bool {
+        self.option_bool_def_fn
+            .map(|f| unsafe { f(i) } != 0)
+            .unwrap_or(false)
+    }
+
+    pub fn option_number_def(&self, i: i32) -> Option<f32> {
+        self.option_number_def_fn.map(|f| unsafe { f(i) })
+    }
+
+    pub fn option_number_min(&self, i: i32) -> Option<f32> {
+        self.option_number_min_fn.map(|f| unsafe { f(i) })
+    }
+
+    pub fn option_number_max(&self, i: i32) -> Option<f32> {
+        self.option_number_max_fn.map(|f| unsafe { f(i) })
+    }
+
+    pub fn option_number_step(&self, i: i32) -> Option<f32> {
+        self.option_number_step_fn.map(|f| unsafe { f(i) })
+    }
+
+    pub fn option_string_def(&self, i: i32) -> Option<String> {
+        self.option_string_def_fn
+            .and_then(|f| unsafe { cstr(f(i)) })
+    }
+
+    /// The default item key for a list option.
+    pub fn option_list_def(&self, i: i32) -> Option<String> {
+        self.option_list_def_fn
+            .and_then(|f| unsafe { cstr(f(i)) })
+            .filter(|s| !s.is_empty())
+    }
+
+    /// A list option's selectable items as `(key, name)`.
+    pub fn option_list_items(&self, i: i32) -> Vec<(String, String)> {
+        let count = self
+            .option_list_count_fn
+            .map(|f| unsafe { f(i) })
+            .unwrap_or(0);
+        (0..count)
+            .filter_map(|j| {
+                let key = self
+                    .option_list_item_key_fn
+                    .and_then(|f| unsafe { cstr(f(i, j)) })?;
+                let name = self
+                    .option_list_item_name_fn
+                    .and_then(|f| unsafe { cstr(f(i, j)) })
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| key.clone());
+                Some((key, name))
+            })
+            .collect()
+    }
+
+    // ---- start positions --------------------------------------------------
+
+    /// Parse `mapinfo.lua` from the VFS (the calling code must have added the
+    /// map's archives) and extract team start positions as `(x, z)` world coords
+    /// from `teams[i].startPos`. Uses unitsync's own Lua parser so it handles the
+    /// archive VFS and any includes. Empty if unavailable or the map has none.
+    pub fn start_positions(&self) -> Vec<(f32, f32)> {
+        let (
+            Some(open),
+            Some(execute),
+            Some(close),
+            Some(root),
+            Some(sub_str),
+            Some(sub_int),
+            Some(pop),
+            Some(int_count),
+            Some(int_entry),
+            Some(float_val),
+        ) = (
+            self.lp_open_file_fn,
+            self.lp_execute_fn,
+            self.lp_close_fn,
+            self.lp_root_table_fn,
+            self.lp_sub_table_str_fn,
+            self.lp_sub_table_int_fn,
+            self.lp_pop_table_fn,
+            self.lp_int_key_list_count_fn,
+            self.lp_int_key_list_entry_fn,
+            self.lp_str_key_float_val_fn,
+        )
+        else {
+            return Vec::new();
+        };
+
+        // "rmMbe" = unitsync's SPRING_VFS_ALL — search raw + map + mod + base, so
+        // mapinfo.lua resolves inside the added archive (not just the filesystem).
+        let (Ok(file), Ok(modes), Ok(x_key), Ok(z_key)) = (
+            CString::new("mapinfo.lua"),
+            CString::new("rmMbe"),
+            CString::new("x"),
+            CString::new("z"),
+        ) else {
+            return Vec::new();
+        };
+        let teams_key = CString::new("teams").unwrap_or_default();
+        let startpos_key = CString::new("startPos").unwrap_or_default();
+
+        let mut positions = Vec::new();
+        unsafe {
+            if open(file.as_ptr(), modes.as_ptr(), modes.as_ptr()) == 0 {
+                return Vec::new();
+            }
+            execute();
+            if root() != 0 && sub_str(teams_key.as_ptr()) != 0 {
+                let count = int_count();
+                for i in 0..count {
+                    let key = int_entry(i);
+                    if sub_int(key) != 0 {
+                        if sub_str(startpos_key.as_ptr()) != 0 {
+                            let x = float_val(x_key.as_ptr(), f32::MIN);
+                            let z = float_val(z_key.as_ptr(), f32::MIN);
+                            if x > f32::MIN && z > f32::MIN {
+                                positions.push((x, z));
+                            }
+                            pop(); // startPos
+                        }
+                        pop(); // teams[i]
+                    }
+                }
+                pop(); // teams
+            }
+            close();
+        }
+        positions
+    }
+
+    /// Parse `mapinfo.lua` (the map's archives must be added) for the map's
+    /// environment settings: `atmosphere.minWind`, `atmosphere.maxWind` and the
+    /// root level `tidalStrength`. Those are the wind and tidal power available
+    /// to wind and tidal generators. Returns `(wind (min,max), tidal)`, each
+    /// `None` when the map omits it or the build lacks the Lua parser.
+    ///
+    /// `tidalStrength` sits beside `gravity` and `maphardness` at the root and
+    /// not under `water`, which is where this used to look and why every map
+    /// reported no tidal power at all. `CMapInfo::ReadGlobal` reads it off the
+    /// top table, so a map that put it under `water` would get no tidal power in
+    /// game either, and reading it there would report a number the engine
+    /// ignores.
+    pub fn map_env(&self) -> (Option<(f32, f32)>, Option<f32>) {
+        let (
+            Some(open),
+            Some(execute),
+            Some(close),
+            Some(root),
+            Some(sub_str),
+            Some(pop),
+            Some(fval),
+        ) = (
+            self.lp_open_file_fn,
+            self.lp_execute_fn,
+            self.lp_close_fn,
+            self.lp_root_table_fn,
+            self.lp_sub_table_str_fn,
+            self.lp_pop_table_fn,
+            self.lp_str_key_float_val_fn,
+        )
+        else {
+            return (None, None);
+        };
+        let (Ok(file), Ok(modes)) = (CString::new("mapinfo.lua"), CString::new("rmMbe")) else {
+            return (None, None);
+        };
+        let atmosphere = CString::new("atmosphere").unwrap_or_default();
+        let min_w = CString::new("minWind").unwrap_or_default();
+        let max_w = CString::new("maxWind").unwrap_or_default();
+        let tidal_k = CString::new("tidalStrength").unwrap_or_default();
+
+        let mut wind = None;
+        let mut tidal = None;
+        unsafe {
+            if open(file.as_ptr(), modes.as_ptr(), modes.as_ptr()) == 0 {
+                return (None, None);
+            }
+            execute();
+            if root() != 0 {
+                if sub_str(atmosphere.as_ptr()) != 0 {
+                    let mn = fval(min_w.as_ptr(), f32::MIN);
+                    let mx = fval(max_w.as_ptr(), f32::MIN);
+                    if mn > f32::MIN && mx > f32::MIN {
+                        wind = Some((mn, mx));
+                    }
+                    pop(); // atmosphere
+                }
+                let t = fval(tidal_k.as_ptr(), f32::MIN);
+                if t > f32::MIN {
+                    tidal = Some(t);
+                }
+            }
+            close();
+        }
+        (wind, tidal)
+    }
+
+    /// Parse `mapinfo.lua` (the map's archives must be added) for the map's visual
+    /// appearance — the same water/sky/sun fields the mapconv preview reads, so a
+    /// content map's 3D preview lights and colours its water the way the engine
+    /// would. Colours are Lua `{r,g,b}` arrays (int keys 1..3); the sub-table names
+    /// (`water`/`atmosphere`/`lighting`) are already lowercase, but the leaf field
+    /// names are queried case-tolerantly since unitsync's parser lowercases keys
+    /// only when the map calls `lowerkeys(mapinfo)` (not all maps do).
+    ///
+    /// `voidWater`/`voidGround` are read via `lpGetStrKeyBoolVal` (the two-call
+    /// present-vs-default trick below); on unitsync builds that don't export it the
+    /// flags stay `None` and the frontend falls back to hiding water only when no
+    /// terrain sits below the sea plane (`minHeight >= 0`).
+    pub fn map_appearance(&self) -> MapAppearance {
+        let (
+            Some(open),
+            Some(execute),
+            Some(close),
+            Some(root),
+            Some(sub_str),
+            Some(pop),
+            Some(str_fval),
+            Some(int_fval),
+        ) = (
+            self.lp_open_file_fn,
+            self.lp_execute_fn,
+            self.lp_close_fn,
+            self.lp_root_table_fn,
+            self.lp_sub_table_str_fn,
+            self.lp_pop_table_fn,
+            self.lp_str_key_float_val_fn,
+            self.lp_int_key_float_val_fn,
+        )
+        else {
+            return MapAppearance::default();
+        };
+        let (Ok(file), Ok(modes)) = (CString::new("mapinfo.lua"), CString::new("rmMbe")) else {
+            return MapAppearance::default();
+        };
+
+        const SENT: f32 = f32::MIN;
+        // Read an `{r,g,b}` array field of the currently-open table (int keys 1..3).
+        let read_vec3 = |names: &[&str]| -> Option<[f32; 3]> {
+            for name in names {
+                let Ok(key) = CString::new(*name) else {
+                    continue;
+                };
+                unsafe {
+                    if sub_str(key.as_ptr()) != 0 {
+                        let v = [int_fval(1, SENT), int_fval(2, SENT), int_fval(3, SENT)];
+                        pop();
+                        if v.iter().all(|&c| c > SENT) {
+                            return Some(v);
+                        }
+                    }
+                }
+            }
+            None
+        };
+        // Read a scalar float field of the currently-open table.
+        let read_f32 = |names: &[&str]| -> Option<f32> {
+            for name in names {
+                let Ok(key) = CString::new(*name) else {
+                    continue;
+                };
+                let v = unsafe { str_fval(key.as_ptr(), SENT) };
+                if v > SENT {
+                    return Some(v);
+                }
+            }
+            None
+        };
+        // Read a boolean field of the currently-open table via `lpGetStrKeyBoolVal`
+        // (returns `None` when the export is missing). The value is queried with
+        // both defaults; when they agree the key is present with that value, when
+        // they differ the key is absent.
+        let bool_fn = self.lp_str_key_bool_val_fn;
+        let read_bool = |names: &[&str]| -> Option<bool> {
+            let f = bool_fn?;
+            for name in names {
+                let Ok(key) = CString::new(*name) else {
+                    continue;
+                };
+                unsafe {
+                    if f(key.as_ptr(), 0) == f(key.as_ptr(), 1) {
+                        return Some(f(key.as_ptr(), 0) != 0);
+                    }
+                }
+            }
+            None
+        };
+
+        let mut app = MapAppearance::default();
+        unsafe {
+            if open(file.as_ptr(), modes.as_ptr(), modes.as_ptr()) == 0 {
+                return app;
+            }
+            execute();
+            if root() != 0 {
+                let (Ok(water), Ok(atmosphere), Ok(lighting)) = (
+                    CString::new("water"),
+                    CString::new("atmosphere"),
+                    CString::new("lighting"),
+                ) else {
+                    close();
+                    return app;
+                };
+                // Root-level `void*` flags (queried while the root table is current).
+                app.void_water = read_bool(&["voidWater", "voidwater"]);
+                app.void_ground = read_bool(&["voidGround", "voidground"]);
+                app.void_alpha_min = read_f32(&["voidAlphaMin", "voidalphamin"]);
+                if sub_str(water.as_ptr()) != 0 {
+                    // surfaceColor wins over planeColor, matching the mapconv reader.
+                    app.water_color =
+                        read_vec3(&["surfaceColor", "surfacecolor", "planeColor", "planecolor"]);
+                    app.water_alpha = read_f32(&["surfaceAlpha", "surfacealpha"]);
+                    app.water_plane_color = read_vec3(&["planeColor", "planecolor"]);
+                    app.water_absorb = read_vec3(&["absorb"]);
+                    app.water_base_color = read_vec3(&["baseColor", "basecolor"]);
+                    app.water_min_color = read_vec3(&["minColor", "mincolor"]);
+                    app.force_rendering = read_bool(&["forceRendering", "forcerendering"]);
+                    pop(); // water
+                }
+                if sub_str(atmosphere.as_ptr()) != 0 {
+                    app.sky_color = read_vec3(&["skyColor", "skycolor"]);
+                    app.fog_color = read_vec3(&["fogColor", "fogcolor"]);
+                    app.cloud_color = read_vec3(&["cloudColor", "cloudcolor"]);
+                    app.cloud_density = read_f32(&["cloudDensity", "clouddensity"]);
+                    app.sun_color = read_vec3(&["sunColor", "suncolor"]);
+                    pop(); // atmosphere
+                }
+                if sub_str(lighting.as_ptr()) != 0 {
+                    app.sun_dir = read_vec3(&["sunDir", "sundir"]);
+                    // Spring's canonical sun colour lives under `lighting`; prefer it
+                    // over any `atmosphere.sunColor` read above.
+                    if let Some(c) = read_vec3(&["sunColor", "suncolor"]) {
+                        app.sun_color = Some(c);
+                    }
+                    app.ground_ambient_color =
+                        read_vec3(&["groundAmbientColor", "groundambientcolor"]);
+                    app.ground_diffuse_color =
+                        read_vec3(&["groundDiffuseColor", "grounddiffusecolor"]);
+                    app.ground_specular_color =
+                        read_vec3(&["groundSpecularColor", "groundspecularcolor"]);
+                    app.ground_shadow_density =
+                        read_f32(&["groundShadowDensity", "groundshadowdensity"]);
+                    pop(); // lighting
+                }
+            }
+            close();
+        }
+        app
+    }
+
+    /// Parse `mapinfo.lua` (the map's archives must be added) for the two names
+    /// the map gives itself: root `name` and root `version`.
+    ///
+    /// Both are `None` on a map that ships no `mapinfo.lua`, which is every SMD
+    /// era map, and that is a true answer rather than a failure: the versioned
+    /// name from `GetMapName` is the identity either way, and these two only say
+    /// how the mapper split it.
+    ///
+    /// Queried case-tolerantly for the same reason [`Self::map_appearance`] is:
+    /// unitsync's parser lowercases keys only when the map calls
+    /// `lowerkeys(mapinfo)`, and not all maps do.
+    pub fn map_identity(&self) -> (Option<String>, Option<String>) {
+        let (Some(open), Some(execute), Some(close), Some(root), Some(str_sval)) = (
+            self.lp_open_file_fn,
+            self.lp_execute_fn,
+            self.lp_close_fn,
+            self.lp_root_table_fn,
+            self.lp_str_key_str_val_fn,
+        ) else {
+            return (None, None);
+        };
+        let (Ok(file), Ok(modes)) = (CString::new("mapinfo.lua"), CString::new("rmMbe")) else {
+            return (None, None);
+        };
+        let empty = CString::new("").unwrap_or_default();
+
+        let mut name = None;
+        let mut version = None;
+        unsafe {
+            if open(file.as_ptr(), modes.as_ptr(), modes.as_ptr()) == 0 {
+                return (None, None);
+            }
+            execute();
+            if root() != 0 {
+                let read = |keys: &[&str]| -> Option<String> {
+                    for key in keys {
+                        let Ok(k) = CString::new(*key) else {
+                            continue;
+                        };
+                        if let Some(s) = cstr(str_sval(k.as_ptr(), empty.as_ptr())) {
+                            let s = s.trim().to_string();
+                            if !s.is_empty() {
+                                return Some(s);
+                            }
+                        }
+                    }
+                    None
+                };
+                name = read(&["name", "Name"]);
+                version = read(&["version", "Version"]);
+            }
+            close();
+        }
+        (name, version)
+    }
+
+    /// Parse `mapinfo.lua` (the map's archives must be added) for the map's
+    /// `atmosphere.skyBox` — the path, inside the map archive, of a DDS cube map
+    /// used as the sky. Returns the referenced path, or `None` when the map omits
+    /// it or the build lacks the Lua parser's string accessor. The key is queried
+    /// case-tolerantly (`skyBox`/`skybox`) since unitsync only lowercases keys when
+    /// the map calls `lowerkeys(mapinfo)`.
+    pub fn map_skybox_name(&self) -> Option<String> {
+        let (
+            Some(open),
+            Some(execute),
+            Some(close),
+            Some(root),
+            Some(sub_str),
+            Some(pop),
+            Some(str_sval),
+        ) = (
+            self.lp_open_file_fn,
+            self.lp_execute_fn,
+            self.lp_close_fn,
+            self.lp_root_table_fn,
+            self.lp_sub_table_str_fn,
+            self.lp_pop_table_fn,
+            self.lp_str_key_str_val_fn,
+        )
+        else {
+            return None;
+        };
+        let (Ok(file), Ok(modes)) = (CString::new("mapinfo.lua"), CString::new("rmMbe")) else {
+            return None;
+        };
+        let atmosphere = CString::new("atmosphere").unwrap_or_default();
+        let empty = CString::new("").unwrap_or_default();
+
+        let mut out = None;
+        unsafe {
+            if open(file.as_ptr(), modes.as_ptr(), modes.as_ptr()) == 0 {
+                return None;
+            }
+            execute();
+            if root() != 0 && sub_str(atmosphere.as_ptr()) != 0 {
+                for key in ["skyBox", "skybox"] {
+                    let Ok(k) = CString::new(key) else {
+                        continue;
+                    };
+                    if let Some(s) = cstr(str_sval(k.as_ptr(), empty.as_ptr())) {
+                        if !s.is_empty() {
+                            out = Some(s);
+                            break;
+                        }
+                    }
+                }
+                pop(); // atmosphere
+            }
+            close();
+        }
+        out
+    }
+
+    /// Read a game's `validais.lua` (the game's archives must be added) — a
+    /// whitelist of skirmish-AI name *patterns* the game declares compatible, so a
+    /// lobby can hide AIs that won't work. The file `return`s an array of
+    /// `{ name = <pattern>, desc = ... }` tables; this collects the non-empty
+    /// `name` patterns.
+    ///
+    /// `None` means "no whitelist" — the file is absent, unparseable, or this
+    /// build lacks the Lua parser — and the caller then shows every AI. `Some`
+    /// carries the declared patterns; the caller filters by any that compile, and
+    /// falls back to showing every AI when a whitelist yields no usable pattern
+    /// (empty or entirely garbled).
+    pub fn valid_ais(&self) -> Option<Vec<String>> {
+        let (
+            Some(open),
+            Some(execute),
+            Some(close),
+            Some(root),
+            Some(sub_int),
+            Some(pop),
+            Some(int_count),
+            Some(int_entry),
+            Some(str_val),
+        ) = (
+            self.lp_open_file_fn,
+            self.lp_execute_fn,
+            self.lp_close_fn,
+            self.lp_root_table_fn,
+            self.lp_sub_table_int_fn,
+            self.lp_pop_table_fn,
+            self.lp_int_key_list_count_fn,
+            self.lp_int_key_list_entry_fn,
+            self.lp_str_key_str_val_fn,
+        )
+        else {
+            return None;
+        };
+        // "rmMbe" = SPRING_VFS_ALL, so validais.lua resolves inside the mounted
+        // game archive (see `start_positions`).
+        let (Ok(file), Ok(modes), Ok(name_key), Ok(empty)) = (
+            CString::new("validais.lua"),
+            CString::new("rmMbe"),
+            CString::new("name"),
+            CString::new(""),
+        ) else {
+            return None;
+        };
+
+        let mut patterns = Vec::new();
+        unsafe {
+            // File not present in the VFS — no whitelist, show all AIs.
+            if open(file.as_ptr(), modes.as_ptr(), modes.as_ptr()) == 0 {
+                return None;
+            }
+            execute();
+            // Chunk failed / didn't return a table — treat as no whitelist rather
+            // than hiding everything, matching how a lobby degrades on a bad file.
+            if root() == 0 {
+                close();
+                return None;
+            }
+            let count = int_count();
+            for i in 0..count {
+                let key = int_entry(i);
+                if sub_int(key) != 0 {
+                    if let Some(name) =
+                        cstr(str_val(name_key.as_ptr(), empty.as_ptr())).filter(|s| !s.is_empty())
+                    {
+                        patterns.push(name);
+                    }
+                    pop(); // entry table
+                }
+            }
+            close();
+        }
+        Some(patterns)
+    }
+
+    /// Read a game's `LuaAI.lua` from the mounted VFS and return each declared Lua
+    /// AI as `(name, desc)`. These are the game's own bots (e.g. SplinterFaction's
+    /// `SimpleAI`/`ChickensAI`/`Sandbox`); unlike native skirmish AIs they are NOT
+    /// reported by `GetSkirmishAICount`, so — like skylobby — we read the file
+    /// directly. Same `LuaParser` walk as [`Self::valid_ais`]; an absent or garbled
+    /// file yields an empty list (the game simply has no Lua AIs).
+    pub fn lua_ais(&self) -> Vec<(String, String)> {
+        let (
+            Some(open),
+            Some(execute),
+            Some(close),
+            Some(root),
+            Some(sub_int),
+            Some(pop),
+            Some(int_count),
+            Some(int_entry),
+            Some(str_val),
+        ) = (
+            self.lp_open_file_fn,
+            self.lp_execute_fn,
+            self.lp_close_fn,
+            self.lp_root_table_fn,
+            self.lp_sub_table_int_fn,
+            self.lp_pop_table_fn,
+            self.lp_int_key_list_count_fn,
+            self.lp_int_key_list_entry_fn,
+            self.lp_str_key_str_val_fn,
+        )
+        else {
+            return Vec::new();
+        };
+        // "rmMbe" = SPRING_VFS_ALL; the VFS is case-insensitive, so the lowercase
+        // path resolves a `LuaAI.lua` of any casing inside the mounted archive.
+        let (Ok(file), Ok(modes), Ok(name_key), Ok(desc_key), Ok(empty)) = (
+            CString::new("luaai.lua"),
+            CString::new("rmMbe"),
+            CString::new("name"),
+            CString::new("desc"),
+            CString::new(""),
+        ) else {
+            return Vec::new();
+        };
+
+        let mut ais = Vec::new();
+        unsafe {
+            if open(file.as_ptr(), modes.as_ptr(), modes.as_ptr()) == 0 {
+                return Vec::new();
+            }
+            execute();
+            if root() == 0 {
+                close();
+                return Vec::new();
+            }
+            let count = int_count();
+            for i in 0..count {
+                let key = int_entry(i);
+                if sub_int(key) != 0 {
+                    if let Some(name) =
+                        cstr(str_val(name_key.as_ptr(), empty.as_ptr())).filter(|s| !s.is_empty())
+                    {
+                        let desc =
+                            cstr(str_val(desc_key.as_ptr(), empty.as_ptr())).unwrap_or_default();
+                        ais.push((name, desc));
+                    }
+                    pop(); // entry table
+                }
+            }
+            close();
+        }
+        ais
+    }
+
+    /// Execute a Lua source string through unitsync's `LuaParser` with `modes`
+    /// VFS access. The caller must wrap the user's code so the chunk returns its
+    /// value through [`crate::lua::CHUNKED_RESULT`] (a `resultChunks` count plus
+    /// `result1`..`resultN`), with an optional `__error` field, see
+    /// [`crate::lua::wrap_source`]. Returns the rejoined result on success, or
+    /// `Err(message)` for a compile error (`lpOpenSource` failed), a chunk
+    /// failure (`lpRootTable` empty), a captured runtime error (`__error` set),
+    /// or a build that lacks the Lua-parser symbols.
+    ///
+    /// The pieces are what keep a result bigger than unitsync's 100,000 byte
+    /// string buffer intact, and a piece that came back as unitsync's own buffer
+    /// complaint is an error rather than data, because the real value is gone.
+    pub fn run_lua_source(&self, source: &str, modes: &str) -> Result<String, String> {
+        let (Some(open), Some(execute), Some(close), Some(root), Some(get_str)) = (
+            self.lp_open_source_fn,
+            self.lp_execute_fn,
+            self.lp_close_fn,
+            self.lp_root_table_fn,
+            self.lp_str_key_str_val_fn,
+        ) else {
+            return Err("this engine's libunitsync does not expose the Lua parser \
+                        (lpOpenSource/lpGetStrKeyStrVal)"
+                .into());
+        };
+        let (Ok(csrc), Ok(cmodes), Ok(err_key), Ok(empty)) = (
+            CString::new(source),
+            CString::new(modes),
+            CString::new("__error"),
+            CString::new(""),
+        ) else {
+            return Err("Lua source or arguments contained a NUL byte".into());
+        };
+
+        unsafe {
+            if open(csrc.as_ptr(), cmodes.as_ptr()) == 0 {
+                return Err(self
+                    .lp_error_log()
+                    .unwrap_or_else(|| "could not compile the script".into()));
+            }
+            // lpExecute returns nonzero on success; we don't read it here because a
+            // failed run leaves no root table, so root() == 0 below is the signal.
+            let _ = execute();
+            if root() == 0 {
+                let log = self.lp_error_log();
+                close();
+                return Err(log.unwrap_or_else(|| {
+                    "script did not produce a result table (lpRootTable failed)".into()
+                }));
+            }
+            let runtime_err =
+                cstr(get_str(err_key.as_ptr(), empty.as_ptr())).filter(|s| !s.is_empty());
+            let result = read_chunked_field("result", |key| {
+                CString::new(key)
+                    .ok()
+                    .and_then(|k| cstr(get_str(k.as_ptr(), empty.as_ptr())))
+                    .unwrap_or_default()
+            });
+            close();
+            match runtime_err {
+                Some(e) => Err(e),
+                None => result,
+            }
+        }
+    }
+
+    /// Execute a REPL wrapper script (see [`crate::lua::wrap_chunks`]) and read
+    /// back its four fields. Unlike [`Self::run_lua_source`], a captured runtime
+    /// error does *not* become `Err`, because the caller needs `prints` even when
+    /// the final chunk raised. Only a compile failure, a missing root table,
+    /// absent parser symbols, or a value that did not survive the read are `Err`.
+    ///
+    /// The result, the prints and the error message all arrive in
+    /// [`crate::lua::CHUNKED_RESULT`] pieces, because all three are as big as the
+    /// user's script makes them.
+    pub fn run_lua_repl(&self, source: &str, modes: &str) -> Result<LuaReplRaw, String> {
+        let (Some(open), Some(execute), Some(close), Some(root), Some(get_str)) = (
+            self.lp_open_source_fn,
+            self.lp_execute_fn,
+            self.lp_close_fn,
+            self.lp_root_table_fn,
+            self.lp_str_key_str_val_fn,
+        ) else {
+            return Err("this engine's libunitsync does not expose the Lua parser \
+                        (lpOpenSource/lpGetStrKeyStrVal)"
+                .into());
+        };
+        let (Ok(csrc), Ok(cmodes), Ok(diverged_key), Ok(empty)) = (
+            CString::new(source),
+            CString::new(modes),
+            CString::new("__diverged"),
+            CString::new(""),
+        ) else {
+            return Err("Lua source or arguments contained a NUL byte".into());
+        };
+
+        unsafe {
+            if open(csrc.as_ptr(), cmodes.as_ptr()) == 0 {
+                return Err(self
+                    .lp_error_log()
+                    .unwrap_or_else(|| "could not compile the script".into()));
+            }
+            let _ = execute();
+            if root() == 0 {
+                let log = self.lp_error_log();
+                close();
+                return Err(log.unwrap_or_else(|| {
+                    "script did not produce a result table (lpRootTable failed)".into()
+                }));
+            }
+            let read = |key: String| {
+                CString::new(key)
+                    .ok()
+                    .and_then(|k| cstr(get_str(k.as_ptr(), empty.as_ptr())))
+                    .unwrap_or_default()
+            };
+            // Read everything before closing the parser, then report the first
+            // field that did not survive.
+            let result = read_chunked_field("result", &read);
+            let prints = read_chunked_field("prints", &read);
+            let error = read_chunked_field("error", &read);
+            let diverged =
+                cstr(get_str(diverged_key.as_ptr(), empty.as_ptr())).filter(|s| !s.is_empty());
+            close();
+            let some = |s: String| Some(s).filter(|s| !s.is_empty());
+            Ok(LuaReplRaw {
+                result: some(result?),
+                error: some(error?),
+                diverged,
+                prints: some(prints?),
+            })
+        }
+    }
+
+    /// The Lua parser's accumulated error log, when non-empty.
+    fn lp_error_log(&self) -> Option<String> {
+        let f = self.lp_error_log_fn?;
+        unsafe { cstr(f()) }.filter(|s| !s.is_empty())
+    }
+
+    // ---- engine configuration ---------------------------------------------
+    //
+    // `GetSpringConfig{String,Int,Float}(name, default)` read the user's
+    // springsettings.cfg by key. The engine returns the configured value if the
+    // key is *set*, otherwise the passed `default` (it does not substitute the
+    // engine's own registered default), so the caller supplies each key's real
+    // default to display an effective value. There is no enumeration accessor, so
+    // the caller reads a curated set of known keys. `None` here means the build
+    // lacks the symbol (treated as "config unavailable" by the caller).
+
+    /// Instantiate unitsync's config handler from the default config source,
+    /// without a full `Init` (which would also scan the VFS). Required before any
+    /// `spring_config_*` read — they throw if the handler isn't set up. Passing an
+    /// empty source uses the default `springsettings.cfg` location and leaves the
+    /// `name` setting untouched. Returns false if the build lacks the symbol.
+    pub fn preinit_config(&self) -> bool {
+        let Some(f) = self.set_spring_config_file_fn else {
+            return false;
+        };
+        let empty = CString::new("").unwrap_or_default();
+        unsafe { f(empty.as_ptr()) };
+        true
+    }
+
+    pub fn spring_config_string(&self, name: &str, default: &str) -> Option<String> {
+        let f = self.spring_config_string_fn?;
+        let (Ok(c), Ok(d)) = (CString::new(name), CString::new(default)) else {
+            return None;
+        };
+        unsafe { cstr(f(c.as_ptr(), d.as_ptr())) }
+    }
+
+    pub fn spring_config_int(&self, name: &str, default: i32) -> Option<i32> {
+        let f = self.spring_config_int_fn?;
+        let c = CString::new(name).ok()?;
+        Some(unsafe { f(c.as_ptr(), default) })
+    }
+
+    pub fn spring_config_float(&self, name: &str, default: f32) -> Option<f32> {
+        let f = self.spring_config_float_fn?;
+        let c = CString::new(name).ok()?;
+        Some(unsafe { f(c.as_ptr(), default) })
+    }
+
+    /// Write a string config value. Returns false if the build lacks the setter
+    /// or the name can't be encoded. `SetSpringConfig*` persist to the config
+    /// source selected by `preinit_config`, so call that first.
+    pub fn set_spring_config_string(&self, name: &str, value: &str) -> bool {
+        let Some(f) = self.set_spring_config_string_fn else {
+            return false;
+        };
+        let (Ok(c), Ok(v)) = (CString::new(name), CString::new(value)) else {
+            return false;
+        };
+        unsafe { f(c.as_ptr(), v.as_ptr()) };
+        true
+    }
+
+    pub fn set_spring_config_int(&self, name: &str, value: i32) -> bool {
+        let Some(f) = self.set_spring_config_int_fn else {
+            return false;
+        };
+        let Ok(c) = CString::new(name) else {
+            return false;
+        };
+        unsafe { f(c.as_ptr(), value) };
+        true
+    }
+
+    pub fn set_spring_config_float(&self, name: &str, value: f32) -> bool {
+        let Some(f) = self.set_spring_config_float_fn else {
+            return false;
+        };
+        let Ok(c) = CString::new(name) else {
+            return false;
+        };
+        unsafe { f(c.as_ptr(), value) };
+        true
+    }
+
+    /// Whether any config accessor resolved — false means this build can't read
+    /// engine configuration at all.
+    pub fn has_spring_config(&self) -> bool {
+        self.spring_config_string_fn.is_some()
+            || self.spring_config_int_fn.is_some()
+            || self.spring_config_float_fn.is_some()
+    }
+
+    /// Whether any config *setter* resolved — false means this build can read but
+    /// not write engine configuration.
+    pub fn has_spring_config_set(&self) -> bool {
+        self.set_spring_config_string_fn.is_some()
+            || self.set_spring_config_int_fn.is_some()
+            || self.set_spring_config_float_fn.is_some()
+    }
+
+    /// Path of the config file unitsync reads (`springsettings.cfg`), for display.
+    pub fn spring_config_file(&self) -> Option<String> {
+        let f = self.spring_config_file_fn?;
+        unsafe { cstr(f()) }.filter(|s| !s.is_empty())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Stand-in for `lpGetStrKeyStrVal`: reads a prepared table, empty for a key
+    /// the script never set.
+    fn reader(fields: &HashMap<String, String>) -> impl FnMut(String) -> String + '_ {
+        move |key| fields.get(&key).cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn joins_chunks_in_order_with_no_separator() {
+        let fields = HashMap::from([
+            ("result1".to_string(), "armcom\tArmada Com".to_string()),
+            (
+                "result2".to_string(),
+                "mander\n armsolar\tSolar".to_string(),
+            ),
+        ]);
+        let joined =
+            read_chunked_result("result", 2, reader(&fields)).expect("both chunks present");
+        assert_eq!(joined, "armcom\tArmada Commander\n armsolar\tSolar");
+    }
+
+    #[test]
+    fn no_chunks_is_an_empty_result() {
+        let fields = HashMap::new();
+        assert_eq!(
+            read_chunked_result("result", 0, reader(&fields)).as_deref(),
+            Ok("")
+        );
+    }
+
+    #[test]
+    fn a_missing_chunk_fails_rather_than_returning_a_short_list() {
+        let fields = HashMap::from([("result1".to_string(), "armcom\tArmada".to_string())]);
+        let err =
+            read_chunked_result("result", 3, reader(&fields)).expect_err("chunk 2 is missing");
+        assert!(err.contains("1 of 3"), "got: {err}");
+    }
+
+    #[test]
+    fn each_field_reads_its_own_chunks() {
+        let fields = HashMap::from([
+            ("printsChunks".to_string(), "2".to_string()),
+            ("prints1".to_string(), "line one\n".to_string()),
+            ("prints2".to_string(), "line two".to_string()),
+        ]);
+        let joined = read_chunked_field("prints", reader(&fields)).expect("both pieces present");
+        assert_eq!(joined, "line one\nline two");
+    }
+
+    #[test]
+    fn a_field_with_no_count_is_a_broken_script_not_an_empty_value() {
+        let fields = HashMap::new();
+        let err = read_chunked_field("prints", reader(&fields)).expect_err("no count was written");
+        assert!(err.contains("how many prints pieces"), "got: {err}");
+    }
+
+    #[test]
+    fn a_chunk_that_overflowed_the_buffer_fails() {
+        // What unitsync writes when a value does not fit: it reads back as data,
+        // so the only way to tell is to recognise it.
+        let fields = HashMap::from([(
+            "result1".to_string(),
+            "Increase STRBUF_SIZE (needs 132890 bytes)".to_string(),
+        )]);
+        let err =
+            read_chunked_result("result", 1, reader(&fields)).expect_err("the value was lost");
+        assert!(err.contains("100,000 byte string buffer"), "got: {err}");
+        assert!(err.contains("result1"), "got: {err}");
+    }
+
+    #[test]
+    fn an_ordinary_result_passes_the_buffer_check() {
+        assert!(check_strbuf("armcom\tArmada Commander", "result").is_ok());
+    }
+}

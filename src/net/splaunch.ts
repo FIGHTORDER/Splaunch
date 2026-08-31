@@ -82,6 +82,12 @@ export interface Scenario {
    * one figure for both axes put every unit on those at the wrong depth.
    */
   mapElmosZ: number | null;
+  /**
+   * Modoptions the battle carries besides the mission's own - where a Coilbox
+   * preset's `modOptionValues` land. Written before the mission's keys, so a
+   * preset cannot overwrite the mission engine.
+   */
+  modOptions: Record<string, string>;
   markers: Marker[];
   /** 1 easy, 2 normal, 3 hard. Gates the per-unit difficulty fields. */
   difficulty: number;
@@ -177,6 +183,40 @@ export async function scenarioScript(scenario: Scenario, player: string): Promis
  * list, which drifted from the one that actually gates `write_script` - so a
  * scenario could pass every check the author could see and still be refused.
  */
+/** A Coilbox preset laid over a scenario, and what could not come with it. */
+export interface AppliedPreset {
+  scenario: Scenario;
+  /** Shown to the author. A preset that plays differently here is the one
+   *  thing the format exists to prevent, so losses are never silent. */
+  ignored: string[];
+  name: string;
+}
+
+/**
+ * Open a Coilbox preset and lay it over this scenario.
+ *
+ * `text` is for a pasted `cbz1.` share code; without one the backend opens a
+ * file picker. Null means the author closed the dialog.
+ */
+export async function importPreset(
+  scenario: Scenario, text?: string,
+): Promise<AppliedPreset | null> {
+  if (!inTauri()) return null;
+  return invoke<AppliedPreset | null>("spsc_import_preset", { scenario, text: text ?? null });
+}
+
+/** Write the battle half of this scenario out as a Coilbox preset. */
+export async function exportPreset(scenario: Scenario): Promise<string | null> {
+  if (!inTauri()) return null;
+  return invoke<string | null>("spsc_export_preset", { scenario });
+}
+
+/** What an author should know but that will not stop a launch. */
+export async function scenarioWarnings(scenario: Scenario): Promise<string[]> {
+  if (!inTauri()) return [];
+  return invoke<string[]>("spsc_warnings", { scenario });
+}
+
 export async function scenarioProblems(scenario: Scenario): Promise<string[]> {
   if (!inTauri()) return [];
   return invoke<string[]>("spsc_problems", { scenario });

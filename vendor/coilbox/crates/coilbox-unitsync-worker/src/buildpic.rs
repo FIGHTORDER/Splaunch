@@ -1,0 +1,965 @@
+//! `--unit-buildpics` mode: resolve each requested start unit's build icon.
+//!
+//! In one `AddAllArchives` session: run the Lua parser once to read each unit's
+//! `buildpic` field (games that override the default), then read the texture from
+//! `unitpics/` in the primary archive (mirroring `archive::game_headers`), decode
+//! it (via `crate::texture`, which adds DDS), and PNG-encode a small icon.
+//! Disk-cached per (game-identity, unit), keyed on cheap file identity like the
+//! header cache.
+//!
+//! The icon is written as a PNG beside its JSON record and named in it, so a
+//! roster of several hundred crosses the bridge as file names the webview
+//! fetches over `coilbox://unitsyncbuildpic/` rather than as base64.
+
+use crate::ffi::Unitsync;
+use crate::model::{BuildpicSkip, UnitBuildpicAsset, UnitBuildpicsOutput, UnitDisplay};
+use std::path::Path;
+
+/// Salts the buildpic cache key, independent of the header cache so this cache can
+/// be invalidated on its own. Bump when the icon encoding, cache format, or the
+/// name/buildpic *resolution logic* changes so pre-change records are re-resolved.
+/// v3: nested/scripted Lua defs + legacy `.fbi` name resolution.
+/// v4: uncompressed DDS decoding, and the reason an icon is missing (#1625), so
+/// records written before it re-resolve rather than staying silently blank.
+/// v5: the asset carries `origin` and `source_archive` (#1678), which a record
+/// written before it has no way to answer.
+/// v6: the icon is a PNG file named by the record rather than base64 inside it
+/// (#1694), and a record written before it holds the icon nowhere else.
+/// v7: `.pcx` is a candidate and decodes, so every unit a game like Expand and
+/// Exterminate ships one for is cached as having no build pic at all.
+const BUILDPIC_CACHE_VERSION: u32 = 7;
+
+/// Read up to this many bytes of a candidate texture before decoding (build pics
+/// are tiny; this is a generous safety bound).
+const BUILDPIC_READ_CAP: usize = 8 * 1024 * 1024;
+
+/// Extensions tried under `unitpics/`, in the engine's resolution order. The
+/// engine's own chain is `dds`, `png`, `pcx`, `bmp` (`UnitDrawerData.cpp`).
+/// `tga` is coilbox's extra, since an explicit `buildpic` can name one and the
+/// engine reads it through DevIL like the rest.
+const BUILDPIC_EXTS: &[&str] = &["dds", "png", "pcx", "tga", "bmp"];
+
+/// Legacy `.fbi` unit files are small TDF text; cap the read generously.
+const FBI_READ_CAP: usize = 256 * 1024;
+
+/// A unit's fields read from its unitdef: the `buildpic` filename (may be empty)
+/// and the human-friendly `name` (may be empty).
+#[derive(Default, Clone)]
+struct UnitFields {
+    buildpic: String,
+    name: String,
+}
+
+/// Lua run through the parser to read each requested unit's `buildpic` filename
+/// and human-friendly `name` from its unitdef, returning a flat `unit\tbuildpic\tname`
+/// string (one line per unit) in the `result` field that `run_lua_source` reads.
+///
+/// Games vary in how they ship unit defs, so this handles both shapes:
+///  - a flat `units/<name>.lua` (self-contained tables, e.g. Balanced Annihilation),
+///    tried first as a fast path; and
+///  - defs nested under `units/<subfolder>/` that call gamedata helper globals
+///    (`lowerkeys`, `Shared`) the game normally injects — we predefine those so the
+///    files evaluate, then recurse to find each wanted unit.
+///
+/// `__WANT__` is replaced with the `['name']=true,` set to look for.
+const BUILDPIC_SCRIPT: &str = r#"
+-- Helpers some games' unit files expect; without them VFS.Include on those defs
+-- raises and yields nothing. A benign auto-stub stands in for `Shared` etc.
+function lowerkeys(t)
+  if type(t) ~= 'table' then return t end
+  local o = {}
+  for k, v in pairs(t) do
+    if type(k) == 'string' then k = string.lower(k) end
+    o[k] = lowerkeys(v)
+  end
+  return o
+end
+local function stub()
+  return setmetatable({}, { __index = function() return stub() end,
+                            __call = function() return stub() end })
+end
+if Shared == nil then Shared = stub() end
+
+local want = { __WANT__ }
+local found = {}
+local remaining = 0
+for _ in pairs(want) do remaining = remaining + 1 end
+local budget = 4000
+
+-- Record any wanted unit defined in `def` (its internal name is a table key).
+local function take(def)
+  if type(def) ~= 'table' then return end
+  for k, v in pairs(def) do
+    if type(v) == 'table' then
+      local key = string.lower(tostring(k))
+      if want[key] and not found[key] then
+        local bp = type(v.buildpic) == 'string' and v.buildpic or ''
+        local nm = type(v.name) == 'string' and v.name or ''
+        found[key] = bp .. '\t' .. nm
+        remaining = remaining - 1
+      end
+    end
+  end
+end
+
+-- Fast path: flat units/<name>.lua.
+for name in pairs(want) do
+  local ok, def = pcall(VFS.Include, 'units/' .. name .. '.lua')
+  if ok then take(def) end
+end
+
+-- Recursive fallback: defs nested under units/<subfolder>/.
+local function scan(dir, depth)
+  if remaining <= 0 or budget <= 0 or depth > 6 then return end
+  if VFS.DirList then
+    for _, f in ipairs(VFS.DirList(dir, '*.lua')) do
+      if remaining <= 0 or budget <= 0 then break end
+      budget = budget - 1
+      local ok, def = pcall(VFS.Include, f)
+      if ok then take(def) end
+    end
+  end
+  if remaining <= 0 or budget <= 0 then return end
+  if VFS.SubDirs then
+    for _, sd in ipairs(VFS.SubDirs(dir, '*')) do
+      if remaining <= 0 or budget <= 0 then break end
+      scan(sd, depth + 1)
+    end
+  end
+end
+if remaining > 0 then scan('units/', 0) end
+
+local parts = {}
+for name in pairs(want) do
+  parts[#parts + 1] = name .. '\t' .. (found[name] or '\t')
+end
+-- In pieces: an all-factions export asks for every unit in the game at once,
+-- which is more than unitsync can return in one string.
+return __cb_chunk(table.concat(parts, '\n'))
+"#;
+
+fn build_buildpic_script(units: &[String]) -> String {
+    // Unit internal names are alnum/underscore, so a single-quoted key is safe.
+    let want: String = units
+        .iter()
+        .map(|u| format!("['{}']=true,", u.to_lowercase()))
+        .collect();
+    format!(
+        "{}{}",
+        crate::lua::CHUNKED_RESULT,
+        BUILDPIC_SCRIPT.replace("__WANT__", &want)
+    )
+}
+
+/// Parse the `unit\tbuildpic\tname` lines the Lua script returns into a map keyed
+/// by unit name. A missing third field (older-style lines) parses as an empty name.
+fn parse_buildpic_result(raw: &str) -> std::collections::HashMap<String, UnitFields> {
+    raw.lines()
+        .filter_map(|line| {
+            let mut it = line.split('\t');
+            let unit = it.next()?;
+            let buildpic = it.next().unwrap_or("").to_string();
+            let name = it.next().unwrap_or("").to_string();
+            Some((unit.to_string(), UnitFields { buildpic, name }))
+        })
+        .collect()
+}
+
+/// Ordered, deduped candidate member paths under `unitpics/` for a unit. Explicit
+/// buildpic (if it has a directory) is tried verbatim first, then its basename
+/// across extensions, then the unit name across extensions.
+fn candidate_members(unit_name: &str, buildpic: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let bp = buildpic.trim();
+    if !bp.is_empty() {
+        if bp.contains('/') {
+            push_unique(&mut out, bp.to_string());
+        }
+        let base = bp.rsplit('/').next().unwrap_or(bp);
+        let base = base.rsplit_once('.').map(|(b, _)| b).unwrap_or(base);
+        for ext in BUILDPIC_EXTS {
+            push_unique(&mut out, format!("unitpics/{}.{ext}", base.to_lowercase()));
+        }
+    }
+    for ext in BUILDPIC_EXTS {
+        push_unique(
+            &mut out,
+            format!("unitpics/{}.{ext}", unit_name.to_lowercase()),
+        );
+    }
+    out
+}
+
+/// Append `s` to `v` only if not already present (small N, so linear scan is fine).
+fn push_unique(v: &mut Vec<String>, s: String) {
+    if !v.contains(&s) {
+        v.push(s);
+    }
+}
+
+/// Find an archive member whose path equals or ends with `/<target_lc>`
+/// (case-insensitive: `list` holds `(lowercased, actual)` pairs, `target_lc` is
+/// already lowercase). Returns the actual stored path.
+fn find_member(list: &[(String, String)], target_lc: &str) -> Option<String> {
+    let suffix = format!("/{target_lc}");
+    list.iter()
+        .find(|(lower, _)| lower == target_lc || lower.ends_with(&suffix))
+        .map(|(_, real)| real.clone())
+}
+
+/// Pull the friendly `name` and `buildpic` out of a legacy TDF unit file (`.fbi`).
+/// TDF is `key=value;` with case-insensitive keys and `//` line comments; each unit
+/// file describes one unit, so we take the first top-level `name=`/`buildpic=`.
+fn parse_fbi_fields(text: &str) -> (Option<String>, Option<String>) {
+    let mut name = None;
+    let mut buildpic = None;
+    for line in text.lines() {
+        let line = line
+            .split("//")
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_end_matches(';')
+            .trim();
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        let val = v.trim();
+        if val.is_empty() {
+            continue;
+        }
+        match k.trim().to_ascii_lowercase().as_str() {
+            "name" if name.is_none() => name = Some(val.to_string()),
+            "buildpic" if buildpic.is_none() => buildpic = Some(val.to_string()),
+            _ => {}
+        }
+    }
+    (name, buildpic)
+}
+
+/// Resolve build icons for `units` in `game_archive`. Cache hits/negatives skip the
+/// unitsync session entirely; otherwise mount the archive once and resolve the
+/// misses. `cache_dir` `None` disables caching (always re-resolves).
+///
+/// `asset_dir` `Some` additionally encodes each build pic as the hub's
+/// `buildpic` asset and writes it there. That is off by default because the
+/// content pages only want the icon, and encoding a whole roster losslessly for
+/// nobody is work with no reader.
+pub fn render(
+    lib: &str,
+    game_archive: &str,
+    units: &[String],
+    cache_dir: Option<&Path>,
+    asset_dir: Option<&Path>,
+) -> UnitBuildpicsOutput {
+    let us = match unsafe { Unitsync::load(Path::new(lib)) } {
+        Ok(u) => u,
+        Err(e) => {
+            return UnitBuildpicsOutput {
+                errors: vec![e],
+                ..Default::default()
+            }
+        }
+    };
+    us.init(false, 0);
+    let out = resolve(&us, game_archive, units, cache_dir, asset_dir);
+    us.uninit();
+    out
+}
+
+/// Resolve build icons in a session the caller has already initialised, mounting
+/// the game's archive set when there is anything left to read and unmounting
+/// before it returns.
+///
+/// Split out for the seed walk (issue #1638), which covers every game over one
+/// `Init` rather than paying to load unitsync a dozen times.
+pub(crate) fn resolve(
+    us: &Unitsync,
+    game_archive: &str,
+    units: &[String],
+    cache_dir: Option<&Path>,
+    asset_dir: Option<&Path>,
+) -> UnitBuildpicsOutput {
+    let mut resolved = std::collections::BTreeMap::new();
+    let mut errors = us.drain_errors();
+
+    let key_base = cache_key_base(us, game_archive);
+    let cache = cache_dir.zip(key_base.as_ref());
+
+    // Partition into cache hits (done) and misses (need the archive mounted).
+    let mut misses: Vec<String> = Vec::new();
+    for unit in units {
+        if let Some((dir, base)) = cache {
+            if let Some(display) = read_cache(dir, base, unit) {
+                if icon_file_present(&display, dir) && cache_covers_assets(&display, asset_dir) {
+                    collect_display(&mut resolved, unit, display);
+                    continue;
+                }
+            }
+        }
+        misses.push(unit.clone());
+    }
+
+    if misses.is_empty() {
+        return UnitBuildpicsOutput {
+            units: resolved,
+            errors,
+        };
+    }
+
+    // Resolved before the mount, from the same scanner data that decides which
+    // archive gets opened below, so what lands on the asset is the archive the
+    // bytes were read out of rather than the argument this was called with.
+    let source_archive = crate::archive::archive_name_for_game(us, game_archive);
+
+    if !us.add_all_archives(game_archive) {
+        errors.push("this engine's libunitsync can't load game archives".into());
+        return UnitBuildpicsOutput {
+            units: resolved,
+            errors,
+        };
+    }
+    errors.extend(us.drain_errors());
+
+    // One Lua pass reads each miss unit's `buildpic` filename + human name.
+    let script = build_buildpic_script(&misses);
+    let fields = match us.run_lua_source(&script, "rmMbe") {
+        Ok(raw) => parse_buildpic_result(&raw),
+        Err(e) => {
+            errors.push(format!("buildpic lua resolve failed: {e}"));
+            std::collections::HashMap::new()
+        }
+    };
+    let _ = us.drain_errors();
+
+    // Read textures from the primary archive (like game_headers): list once,
+    // case-insensitive match against each unit's candidate members.
+    let opened = match crate::archive::resolve_open_path(us, game_archive)
+        .as_deref()
+        .and_then(|p| us.open_archive(p))
+    {
+        Some(handle) => {
+            let list: Vec<(String, String)> = us
+                .list_archive_files(handle)
+                .into_iter()
+                .map(|(path, _)| (path.to_lowercase(), path))
+                .collect();
+            for unit in &misses {
+                let uf = fields
+                    .get(&unit.to_lowercase())
+                    .cloned()
+                    .unwrap_or_default();
+                let mut name = uf.name;
+                let mut buildpic = uf.buildpic;
+                // Legacy TDF games (e.g. XTA) store units as `.fbi` text, which is
+                // not Lua — unitsync can't process them and the Lua pass finds
+                // nothing. Read name/buildpic straight from the unit's `.fbi`.
+                if name.is_empty() || buildpic.is_empty() {
+                    if let Some(actual) =
+                        find_member(&list, &format!("{}.fbi", unit.to_lowercase()))
+                    {
+                        if let Some((_, bytes)) =
+                            us.read_archive_member(handle, &actual, FBI_READ_CAP)
+                        {
+                            let (fnm, fbp) = parse_fbi_fields(&String::from_utf8_lossy(&bytes));
+                            if name.is_empty() {
+                                if let Some(x) = fnm {
+                                    name = x;
+                                }
+                            }
+                            if buildpic.is_empty() {
+                                if let Some(x) = fbp {
+                                    buildpic = x;
+                                }
+                            }
+                        }
+                    }
+                }
+                let members: Vec<String> = candidate_members(unit, &buildpic)
+                    .into_iter()
+                    .filter_map(|cand| {
+                        list.iter()
+                            .find(|(lower, _)| *lower == cand.to_lowercase())
+                            .map(|(_, real)| real.clone())
+                    })
+                    .collect();
+                let picture = resolve_picture(us, handle, &members, asset_dir, &source_archive);
+                let (icon_file, icon) = store_icon(cache, unit, picture.icon_png.as_deref());
+                let display = UnitDisplay {
+                    name: Some(name).filter(|s| !s.is_empty()),
+                    icon_file,
+                    icon,
+                    icon_skipped: picture.icon_skipped,
+                    asset: picture.asset,
+                    asset_skipped: picture.skipped,
+                };
+                if let Some((dir, base)) = cache {
+                    write_cache(dir, base, unit, &display);
+                }
+                collect_display(&mut resolved, unit, display);
+            }
+            us.close_archive(handle);
+            true
+        }
+        None => false,
+    };
+    if !opened {
+        errors.push(format!("could not open archive {game_archive}"));
+    }
+
+    errors.extend(us.drain_errors());
+    us.remove_all_archives();
+
+    UnitBuildpicsOutput {
+        units: resolved,
+        errors,
+    }
+}
+
+/// What one unit's build pic turned into: the icon the content pages draw, or
+/// the reason there is none, and when assets were asked for, either the encoded
+/// asset or the reason there is none of those.
+#[derive(Default)]
+struct Picture {
+    icon_png: Option<Vec<u8>>,
+    icon_skipped: Option<BuildpicSkip>,
+    asset: Option<UnitBuildpicAsset>,
+    skipped: Option<BuildpicSkip>,
+}
+
+/// Decode the first of `members` that decodes, then make an icon from it, and an
+/// asset too when `asset_dir` is set.
+///
+/// `members` are the candidates that exist in the archive, in resolution order.
+/// A candidate that fails to decode falls through to the next, so a game that
+/// ships both a BC7 `.dds` and a `.png` still gets a picture out of the `.png`.
+fn resolve_picture(
+    us: &Unitsync,
+    handle: i32,
+    members: &[String],
+    asset_dir: Option<&Path>,
+    source_archive: &str,
+) -> Picture {
+    for member in members {
+        let ext = member.rsplit('.').next().unwrap_or("").to_lowercase();
+        let Some((size, raw)) = us.read_archive_member(handle, member, BUILDPIC_READ_CAP) else {
+            continue;
+        };
+        if size as usize > BUILDPIC_READ_CAP {
+            continue;
+        }
+        let Some(img) = crate::texture::decode_texture(&ext, &raw) else {
+            continue;
+        };
+        let decoded = image::DynamicImage::ImageRgba8(img);
+        let (asset, skipped) = match asset_dir {
+            Some(dir) => match encode_asset(dir, member, &raw, &decoded, source_archive) {
+                Ok(a) => (Some(a), None),
+                Err(why) => (None, Some(why)),
+            },
+            None => (None, None),
+        };
+        let icon_png = crate::texture::encode_icon_png(decoded.into_rgba8());
+        return Picture {
+            // The picture decoded, so the only way there is no icon now is the
+            // PNG encoder refusing it.
+            icon_skipped: icon_png.is_none().then_some(BuildpicSkip::EncodeFailed),
+            icon_png,
+            asset,
+            skipped,
+        };
+    }
+    no_picture(members, asset_dir)
+}
+
+/// The answer when nothing in `members` yielded a picture. A `unitpics/` member
+/// that is there and will not decode is coilbox's problem, and a unit with no
+/// member at all is a game that ships it no build pic. They are different
+/// answers and used to read the same, which is #1625.
+///
+/// Reported on `icon_skipped` whether or not assets were asked for, because the
+/// content pages need it too, and mirrored onto the asset answer when they were.
+fn no_picture(members: &[String], asset_dir: Option<&Path>) -> Picture {
+    let why = if members.is_empty() {
+        BuildpicSkip::NoSource
+    } else {
+        BuildpicSkip::Undecodable
+    };
+    Picture {
+        icon_skipped: Some(why),
+        skipped: asset_dir.map(|_| why),
+        ..Default::default()
+    }
+}
+
+/// Encode one decoded build pic to the hub's `buildpic` profile and write it into
+/// `asset_dir`, named after the hash of its own bytes like the hub's object path.
+///
+/// `raw` is the archive member exactly as it was read, which is what
+/// `source_hash` is over. Hashing the decoded pixels or the encoded output there
+/// instead would move the identity every time the decoder or libwebp changed.
+fn encode_asset(
+    asset_dir: &Path,
+    member: &str,
+    raw: &[u8],
+    decoded: &image::DynamicImage,
+    source_archive: &str,
+) -> Result<UnitBuildpicAsset, BuildpicSkip> {
+    use crate::assetencode::{
+        encode_variant, ext_for_mime, sha256_hex, EncodeError, EXTRACTED_ORIGIN,
+    };
+
+    let variant = &coilbox_assets::vocabulary().unit.buildpic_variant;
+    let encoded = encode_variant(variant, decoded).map_err(|e| match e {
+        EncodeError::NotSquare { .. } => BuildpicSkip::NotSquare,
+        EncodeError::TooLarge { .. } => BuildpicSkip::TooLarge,
+        _ => BuildpicSkip::EncodeFailed,
+    })?;
+
+    let hash = sha256_hex(&encoded.bytes);
+    let path = asset_dir.join(format!("{hash}.{}", ext_for_mime(&encoded.mime)));
+    std::fs::create_dir_all(asset_dir).map_err(|_| BuildpicSkip::NotWritten)?;
+    // Same content, same name, so a file already there is already this asset.
+    if !path.exists() {
+        std::fs::write(&path, &encoded.bytes).map_err(|_| BuildpicSkip::NotWritten)?;
+    }
+
+    Ok(UnitBuildpicAsset {
+        variant: variant.clone(),
+        origin: EXTRACTED_ORIGIN.to_string(),
+        source_archive: source_archive.to_string(),
+        path: path.to_string_lossy().into_owned(),
+        hash,
+        source_hash: sha256_hex(raw),
+        source_member: member.to_string(),
+        encode_profile: encoded.encode_profile,
+        mime: encoded.mime,
+        width: encoded.width,
+        height: encoded.height,
+        bytes: encoded.bytes.len() as u64,
+    })
+}
+
+/// Put an icon's bytes where the webview can fetch them: a PNG beside the unit's
+/// cache record, sharing its stem, named on the record as `icon_file`. Returns
+/// the pair `(icon_file, icon)`, of which at most one is ever set.
+///
+/// Inlining is the fallback for the two cases with no file to point at: no cache
+/// dir at all, and a write that failed. A page then still draws the icon, it
+/// just pays base64 for it.
+fn store_icon(
+    cache: Option<(&Path, &String)>,
+    unit: &str,
+    png: Option<&[u8]>,
+) -> (Option<String>, Option<String>) {
+    let Some(png) = png else {
+        return (None, None);
+    };
+    if let Some((dir, base)) = cache {
+        let name = icon_file_name(base, unit);
+        let _ = std::fs::create_dir_all(dir);
+        if std::fs::write(dir.join(&name), png).is_ok() {
+            return (Some(name), None);
+        }
+    }
+    (None, Some(crate::texture::png_data_url(png)))
+}
+
+/// A unit's icon file name: its cache record's stem, as a PNG.
+fn icon_file_name(base: &str, unit: &str) -> String {
+    format!("{}.png", unit_stem(base, unit))
+}
+
+/// Whether the icon file a cached record names is still on disk. A cache clean
+/// removes the PNG and leaves the record, and a hit on that record would draw a
+/// broken picture, so it has to re-resolve. A record naming no file (nothing
+/// resolved, or the icon is inline) has nothing to miss.
+fn icon_file_present(display: &UnitDisplay, dir: &Path) -> bool {
+    display
+        .icon_file
+        .as_ref()
+        .is_none_or(|name| dir.join(name).exists())
+}
+
+/// Whether a cached record already answers what this run is asking for.
+///
+/// A record written before assets were wanted has no asset decision in it, and a
+/// record whose file has since been cleared out of the asset directory names
+/// bytes that are no longer there. Both re-resolve.
+fn cache_covers_assets(display: &UnitDisplay, asset_dir: Option<&Path>) -> bool {
+    let Some(dir) = asset_dir else {
+        return true;
+    };
+    match (&display.asset, &display.asset_skipped) {
+        (Some(asset), _) => {
+            let path = Path::new(&asset.path);
+            path.parent() == Some(dir) && path.exists()
+        }
+        (None, Some(_)) => true,
+        (None, None) => false,
+    }
+}
+
+/// Cheap, stable per-game cache identity (path + size + mtime + version salt).
+/// `None` disables caching for this game. Mirrors `archive::game_cache_key`.
+fn cache_key_base(us: &Unitsync, archive_name: &str) -> Option<String> {
+    use std::hash::{Hash, Hasher};
+    let dir = us.archive_path(archive_name)?;
+    let path = Path::new(&dir).join(archive_name);
+    let md = std::fs::metadata(&path).ok()?;
+    let mtime = md
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    BUILDPIC_CACHE_VERSION.hash(&mut h);
+    path.hash(&mut h);
+    md.len().hash(&mut h);
+    mtime.hash(&mut h);
+    Some(format!("{:016x}", h.finish()))
+}
+
+/// Insert a resolved record into the output map, skipping fully-empty ones (the UI
+/// falls back to the engine start-unit name for those).
+fn collect_display(
+    map: &mut std::collections::BTreeMap<String, UnitDisplay>,
+    unit: &str,
+    display: UnitDisplay,
+) {
+    if !display.is_empty() {
+        map.insert(unit.to_string(), display);
+    }
+}
+
+/// Per-unit cache file stem: `<gamekey>_<sanitized-unit>`.
+fn unit_stem(base: &str, unit: &str) -> String {
+    let safe: String = unit
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("{base}_{safe}")
+}
+
+/// Read a unit's cached record. `Some(display)` = resolved (the display may be
+/// empty, i.e. "resolved to nothing" — still a hit that skips the mount); `None` =
+/// cache miss. Present-but-unparseable files are treated as misses.
+fn read_cache(dir: &Path, base: &str, unit: &str) -> Option<UnitDisplay> {
+    let path = dir.join(format!("{}.json", unit_stem(base, unit)));
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// Best-effort cache write of the resolved record as JSON. An empty record is
+/// still written so a re-run doesn't re-mount the archive for a unit we already
+/// know has nothing.
+fn write_cache(dir: &Path, base: &str, unit: &str, display: &UnitDisplay) {
+    let _ = std::fs::create_dir_all(dir);
+    let path = dir.join(format!("{}.json", unit_stem(base, unit)));
+    if let Ok(json) = serde_json::to_string(display) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+/// Print a buildpics error envelope to stdout (used on the panic path in `main`).
+pub fn emit_error(msg: String) {
+    let out = UnitBuildpicsOutput {
+        errors: vec![msg],
+        ..Default::default()
+    };
+    println!("{}", serde_json::to_string(&out).unwrap_or_default());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assetencode::sha256_hex;
+    use image::{DynamicImage, Rgba, RgbaImage};
+
+    /// A game archive's own versioned name, which is what `resolve` hands the
+    /// encoder rather than the file name it was called with.
+    const ARCHIVE: &str = "Beyond All Reason test-30922-8064a43";
+
+    /// A square build-pic-shaped picture with a transparent corner.
+    fn square(side: u32) -> DynamicImage {
+        let mut img = RgbaImage::new(side, side);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = if x < side / 4 && y < side / 4 {
+                Rgba([0, 0, 0, 0])
+            } else {
+                Rgba([(x % 256) as u8, (y % 256) as u8, 90, 255])
+            };
+        }
+        DynamicImage::ImageRgba8(img)
+    }
+
+    fn asset_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "coilbox-buildpic-asset-{}-{tag}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn writes_the_asset_as_a_file_named_after_its_own_bytes() {
+        let dir = asset_dir("write");
+        let raw = b"the archive member bytes, whatever they were".to_vec();
+        let asset = encode_asset(&dir, "unitpics/armcom.dds", &raw, &square(128), ARCHIVE).unwrap();
+
+        let on_disk = std::fs::read(&asset.path).expect("asset file written");
+        assert_eq!(
+            asset.path,
+            dir.join(format!("{}.webp", asset.hash)).to_string_lossy()
+        );
+        assert_eq!(asset.hash, sha256_hex(&on_disk));
+        assert_eq!(asset.bytes, on_disk.len() as u64);
+        assert_eq!(asset.mime, "image/webp");
+        assert_eq!(asset.encode_profile, "webp-lossless-256");
+        assert_eq!(asset.variant, "buildpic");
+        assert_eq!(asset.source_member, "unitpics/armcom.dds");
+        assert_eq!(asset.origin, "extracted");
+        assert_eq!(asset.source_archive, ARCHIVE);
+    }
+
+    #[test]
+    fn hashes_the_archive_bytes_for_identity_and_the_encoded_bytes_for_the_path() {
+        // The split is what keeps dedupe working across coilbox releases, so the
+        // two hashes have to come from different bytes.
+        let dir = asset_dir("hashes");
+        let raw = b"a dds nobody here has to be able to decode".to_vec();
+        let asset = encode_asset(&dir, "unitpics/armcom.dds", &raw, &square(64), ARCHIVE).unwrap();
+        assert_eq!(asset.source_hash, sha256_hex(&raw));
+        assert_ne!(asset.source_hash, asset.hash);
+    }
+
+    #[test]
+    fn keeps_a_source_bigger_than_an_icon_wants_up_to_the_hub_cap() {
+        let dir = asset_dir("size");
+        let big = encode_asset(&dir, "unitpics/big.png", b"src", &square(512), ARCHIVE).unwrap();
+        assert_eq!((big.width, big.height), (256, 256));
+        let exact =
+            encode_asset(&dir, "unitpics/exact.png", b"src", &square(256), ARCHIVE).unwrap();
+        assert_eq!((exact.width, exact.height), (256, 256));
+        // The point of the issue: 256 and 200 both used to come back as 128.
+        let odd = encode_asset(&dir, "unitpics/odd.png", b"src", &square(200), ARCHIVE).unwrap();
+        assert_eq!((odd.width, odd.height), (200, 200));
+    }
+
+    #[test]
+    fn skips_a_non_square_build_pic_rather_than_cropping_it() {
+        let dir = asset_dir("nonsquare");
+        let wide = DynamicImage::ImageRgba8(RgbaImage::new(128, 64));
+        assert_eq!(
+            encode_asset(&dir, "unitpics/wide.png", b"src", &wide, ARCHIVE).unwrap_err(),
+            BuildpicSkip::NotSquare
+        );
+    }
+
+    #[test]
+    fn a_cached_record_from_before_assets_does_not_answer_an_asset_run() {
+        let dir = asset_dir("cache");
+        let icon_only = UnitDisplay {
+            icon: Some("data:image/png;base64,xx".into()),
+            ..Default::default()
+        };
+        // Nothing wants an asset, so the record is complete as it stands.
+        assert!(cache_covers_assets(&icon_only, None));
+        assert!(!cache_covers_assets(&icon_only, Some(&dir)));
+
+        let skipped = UnitDisplay {
+            asset_skipped: Some(BuildpicSkip::NotSquare),
+            ..Default::default()
+        };
+        assert!(cache_covers_assets(&skipped, Some(&dir)));
+    }
+
+    #[test]
+    fn a_record_whose_asset_file_is_gone_re_resolves() {
+        let dir = asset_dir("gone");
+        let asset =
+            encode_asset(&dir, "unitpics/armcom.png", b"src", &square(64), ARCHIVE).unwrap();
+        let display = UnitDisplay {
+            asset: Some(asset.clone()),
+            ..Default::default()
+        };
+        assert!(cache_covers_assets(&display, Some(&dir)));
+        std::fs::remove_file(&asset.path).unwrap();
+        assert!(!cache_covers_assets(&display, Some(&dir)));
+        // And a record pointing into a different directory does not count either.
+        assert!(!cache_covers_assets(
+            &display,
+            Some(&asset_dir("elsewhere"))
+        ));
+    }
+
+    /// The whole of #1694: what a resolved unit carries is a file name, and the
+    /// bytes are on disk under it rather than base64 in the record.
+    #[test]
+    fn an_icon_is_written_as_a_file_and_named_rather_than_inlined() {
+        let dir = asset_dir("icon");
+        let base = "0123456789abcdef".to_string();
+        let png = crate::texture::encode_icon_png(square(64).into_rgba8()).unwrap();
+
+        let (file, inline) = store_icon(Some((&dir, &base)), "armcom", Some(&png));
+        assert_eq!(inline, None);
+        let name = file.expect("the icon is named");
+        assert_eq!(name, "0123456789abcdef_armcom.png");
+        assert_eq!(std::fs::read(dir.join(&name)).unwrap(), png);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With no cache dir there is no file to point at, so the icon still reaches
+    /// the page, just inline.
+    #[test]
+    fn an_icon_with_nowhere_to_go_falls_back_to_base64() {
+        let png = crate::texture::encode_icon_png(square(64).into_rgba8()).unwrap();
+        let (file, inline) = store_icon(None, "armcom", Some(&png));
+        assert_eq!(file, None);
+        assert!(inline.unwrap().starts_with("data:image/png;base64,"));
+        // And a unit with no picture at all carries neither.
+        assert_eq!(store_icon(None, "armcom", None), (None, None));
+    }
+
+    /// A cache clean takes the PNG and leaves the record. Answering from that
+    /// record would draw a broken picture, so it counts as a miss.
+    #[test]
+    fn a_record_whose_icon_file_is_gone_re_resolves() {
+        let dir = asset_dir("icongone");
+        let base = "0123456789abcdef".to_string();
+        let png = crate::texture::encode_icon_png(square(64).into_rgba8()).unwrap();
+        let (file, _) = store_icon(Some((&dir, &base)), "armcom", Some(&png));
+        let display = UnitDisplay {
+            icon_file: file.clone(),
+            ..Default::default()
+        };
+        assert!(icon_file_present(&display, &dir));
+        std::fs::remove_file(dir.join(file.unwrap())).unwrap();
+        assert!(!icon_file_present(&display, &dir));
+        // A record naming no file has nothing to miss.
+        assert!(icon_file_present(&UnitDisplay::default(), &dir));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_build_pic_and_an_unreadable_one_are_different_answers() {
+        let dir = asset_dir("why");
+        let none = no_picture(&[], Some(&dir));
+        let unreadable = no_picture(&["unitpics/armcom.dds".to_string()], Some(&dir));
+        assert_eq!(none.icon_skipped, Some(BuildpicSkip::NoSource));
+        assert_eq!(none.skipped, Some(BuildpicSkip::NoSource));
+        assert_eq!(unreadable.icon_skipped, Some(BuildpicSkip::Undecodable));
+        assert_eq!(unreadable.skipped, Some(BuildpicSkip::Undecodable));
+    }
+
+    #[test]
+    fn the_icon_reason_is_reported_even_when_nobody_asked_for_an_asset() {
+        // The content pages never pass an asset dir, so a reason only carried on
+        // the asset answer would never reach them, which is the half of #1625
+        // that was still open.
+        let unreadable = no_picture(&["unitpics/armcom.dds".to_string()], None);
+        assert_eq!(unreadable.icon_skipped, Some(BuildpicSkip::Undecodable));
+        assert_eq!(unreadable.skipped, None);
+    }
+
+    #[test]
+    fn the_icon_reason_serializes_under_its_own_key() {
+        let json = serde_json::to_string(&UnitDisplay {
+            icon_skipped: Some(BuildpicSkip::Undecodable),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"iconSkipped":"undecodable"}"#);
+    }
+
+    #[test]
+    fn parses_tab_separated_buildpic_result() {
+        let got =
+            parse_buildpic_result("armcom\tunitpics/armcom.dds\tArmada Commander\ncorcom\t\t\n");
+        let arm = got.get("armcom").expect("armcom present");
+        assert_eq!(arm.buildpic, "unitpics/armcom.dds");
+        assert_eq!(arm.name, "Armada Commander");
+        let cor = got.get("corcom").expect("corcom present");
+        assert_eq!(cor.buildpic, "");
+        assert_eq!(cor.name, "");
+    }
+
+    #[test]
+    fn candidates_prefer_explicit_buildpic_then_unit_name() {
+        let c = candidate_members("armcom", "unitpics/ArmCom_alt.png");
+        assert_eq!(c[0], "unitpics/ArmCom_alt.png");
+        assert!(c.contains(&"unitpics/armcom_alt.dds".to_string()));
+        assert!(c.contains(&"unitpics/armcom.dds".to_string()));
+    }
+
+    #[test]
+    fn candidates_with_no_buildpic_use_unit_name_only() {
+        let c = candidate_members("armcom", "");
+        assert_eq!(c[0], "unitpics/armcom.dds");
+        assert!(c.contains(&"unitpics/armcom.png".to_string()));
+    }
+
+    /// The engine tries `.pcx` after `.png` and before `.bmp`, and games like
+    /// Expand and Exterminate ship every build pic that way.
+    #[test]
+    fn candidates_try_pcx_where_the_engine_does() {
+        let c = candidate_members("alienaaa", "");
+        let at = |ext: &str| c.iter().position(|m| m.ends_with(ext)).expect(ext);
+        assert!(c.contains(&"unitpics/alienaaa.pcx".to_string()));
+        assert!(at(".png") < at(".pcx") && at(".pcx") < at(".bmp"));
+    }
+
+    #[test]
+    fn parses_fbi_name_and_buildpic() {
+        let fbi = "[UNITINFO]\n{\n\tside=Arm;\n\tname=Commander;\n\t\
+                   description=Commander;\n\tunitname=arm_commander;\n\t\
+                   buildpic=arm_commander.DDS;\n\tmaxdamage=3000;\n}\n";
+        let (name, buildpic) = parse_fbi_fields(fbi);
+        assert_eq!(name.as_deref(), Some("Commander"));
+        assert_eq!(buildpic.as_deref(), Some("arm_commander.DDS"));
+    }
+
+    #[test]
+    fn fbi_ignores_comments_and_missing_fields() {
+        let (name, buildpic) = parse_fbi_fields("// name=Nope;\nunitname=x;\n");
+        assert_eq!(name, None);
+        assert_eq!(buildpic, None);
+    }
+
+    #[test]
+    fn find_member_matches_nested_case_insensitively() {
+        let list = vec![
+            (
+                "units/tarm_commander.fbi".into(),
+                "Units/Tarm_commander.fbi".into(),
+            ),
+            (
+                "units/arm_commander.fbi".into(),
+                "Units/arm_commander.fbi".into(),
+            ),
+        ];
+        // Exact basename match wins; the `T`-prefixed sibling must not match.
+        assert_eq!(
+            find_member(&list, "arm_commander.fbi").as_deref(),
+            Some("Units/arm_commander.fbi")
+        );
+    }
+
+    #[test]
+    fn build_script_covers_flat_and_nested_layouts() {
+        let s = build_buildpic_script(&["armcom".into(), "corcom".into()]);
+        assert!(s.contains("['armcom']=true") && s.contains("['corcom']=true"));
+        assert!(s.contains("VFS.Include")); // flat fast path
+        assert!(s.contains("VFS.SubDirs")); // recursive fallback
+        assert!(s.contains("lowerkeys")); // gamedata helper shim
+        assert!(s.contains(".buildpic") && s.contains(".name"));
+        // The result goes back in buffer-sized pieces, so the helper that makes
+        // them has to be part of the script the parser runs.
+        assert!(s.contains("local function __cb_chunk"));
+        assert!(s.contains("return __cb_chunk("));
+    }
+}

@@ -23,6 +23,9 @@ serde_json = "1"
 # Linux build does not need OpenSSL.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
 zip = { version = "4.2.0", default-features = false, features = ["deflate"] }
+# Coilbox share codes are raw DEFLATE then base64url. Already in the tree behind
+# `zip`, so naming it here costs nothing new.
+flate2 = "1"
 tauri-plugin-dialog = "2.0.0-rc.8"
 
 [profile.release]
