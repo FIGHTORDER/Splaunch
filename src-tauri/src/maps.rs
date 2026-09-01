@@ -16,7 +16,7 @@ const ENDPOINT: &str = "http://zero-k.info/ContentService.svc";
 const SOAP_ACTION: &str = "http://tempuri.org/IContentService/GetPublicCommunityInfo";
 const ALLOWED_HOST: &str = "zero-k.info";
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogueMap {
     pub name: String,
@@ -95,12 +95,80 @@ pub fn parse_catalogue(xml: &str) -> Vec<CatalogueMap> {
     out
 }
 
+/// How long a cached catalogue is good for.
+///
+/// The catalogue is a list of every featured and supported map, and it changes
+/// when somebody publishes one - days apart, not minutes. Splaunch asked for
+/// all 343 of them on every single start, which is the shape of traffic
+/// Coilbox's author reports having had real consequences against the game
+/// infrastructure at BAR, up to a dead endpoint. A day is generous to the
+/// service and invisible to an author.
+const CACHE_MAX_AGE: u64 = 24 * 60 * 60;
+
+/// Where a fetched catalogue is kept between runs.
+///
+/// Not the temp directory: the point is to survive a reboot. Follows each
+/// platform's own convention rather than taking a dependency for three lines.
+fn cache_path() -> Option<std::path::PathBuf> {
+    let base = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from)
+    } else {
+        std::env::var_os("XDG_CACHE_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
+    }?;
+    Some(base.join("splaunch").join("map-catalogue.json"))
+}
+
+#[derive(Serialize, serde::Deserialize)]
+struct CachedCatalogue {
+    /// Seconds since the epoch, so age is a subtraction rather than a date
+    /// library.
+    fetched: u64,
+    maps: Vec<CatalogueMap>,
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// The catalogue from disk, if one is there and still fresh.
+fn cached_catalogue() -> Option<Vec<CatalogueMap>> {
+    let text = std::fs::read_to_string(cache_path()?).ok()?;
+    let cached: CachedCatalogue = serde_json::from_str(&text).ok()?;
+    // A clock that has gone backwards makes the age nonsense; treat that as
+    // stale rather than as valid for ever.
+    let age = now_secs().checked_sub(cached.fetched)?;
+    (age < CACHE_MAX_AGE && !cached.maps.is_empty()).then_some(cached.maps)
+}
+
+fn write_cache(maps: &[CatalogueMap]) {
+    let Some(path) = cache_path() else { return };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let body = CachedCatalogue { fetched: now_secs(), maps: maps.to_vec() };
+    if let Ok(text) = serde_json::to_string(&body) {
+        // A cache that cannot be written is not an error worth showing: the
+        // next start simply asks again.
+        let _ = std::fs::write(path, text);
+    }
+}
+
 /// Every map the service knows about.
 ///
-/// Errors are the caller's to show, not to hide: a map picker with no maps in
-/// it should say why rather than looking like the catalogue is empty.
+/// Answered from a day-old cache where there is one, so a restart is not
+/// another 343-map request. Errors are the caller's to show, not to hide: a map
+/// picker with no maps in it should say why rather than looking like the
+/// catalogue is empty.
 #[tauri::command]
 pub fn sp_maps() -> Result<Vec<CatalogueMap>, String> {
+    if let Some(maps) = cached_catalogue() {
+        return Ok(maps);
+    }
     if !host_allowed(ENDPOINT) {
         return Err("refusing to fetch from anywhere but zero-k.info".into());
     }
@@ -121,7 +189,11 @@ pub fn sp_maps() -> Result<Vec<CatalogueMap>, String> {
         return Err(format!("the content service answered {}", res.status()));
     }
     let text = res.text().map_err(|e| format!("unreadable response: {e}"))?;
-    Ok(parse_catalogue(&text))
+    let maps = parse_catalogue(&text);
+    if !maps.is_empty() {
+        write_cache(&maps);
+    }
+    Ok(maps)
 }
 
 #[cfg(test)]
@@ -172,6 +244,57 @@ mod tests {
     fn an_entry_missing_its_id_is_skipped_rather_than_guessed() {
         let xml = "<a:MapItem><a:Name>Nameless</a:Name></a:MapItem>";
         assert!(parse_catalogue(xml).is_empty());
+    }
+
+    #[test]
+    fn a_cache_is_used_while_it_is_fresh_and_ignored_once_it_is_not() {
+        /* The catalogue was fetched on every start - 343 maps, every time. The
+           age check is the whole mechanism, so it is the thing to test. */
+        let dir = std::env::temp_dir().join("splaunch-cache-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("map-catalogue.json");
+
+        let maps = vec![CatalogueMap {
+            name: "Comet Catcher Redux".into(),
+            resource_id: 55646,
+            width_elmos: Some(6144),
+            height_elmos: Some(8192),
+        }];
+
+        let write = |age: u64| {
+            let body = CachedCatalogue { fetched: now_secs() - age, maps: maps.clone() };
+            std::fs::write(&path, serde_json::to_string(&body).unwrap()).unwrap();
+        };
+        let read = || -> Option<Vec<CatalogueMap>> {
+            let text = std::fs::read_to_string(&path).ok()?;
+            let cached: CachedCatalogue = serde_json::from_str(&text).ok()?;
+            let age = now_secs().checked_sub(cached.fetched)?;
+            (age < CACHE_MAX_AGE && !cached.maps.is_empty()).then_some(cached.maps)
+        };
+
+        write(60);
+        assert_eq!(read().as_deref(), Some(maps.as_slice()), "a fresh cache was not used");
+        write(CACHE_MAX_AGE + 1);
+        assert!(read().is_none(), "a stale cache was used");
+
+        // A clock that has gone backwards must not make a cache valid for ever.
+        let body = CachedCatalogue { fetched: now_secs() + 10_000, maps: maps.clone() };
+        std::fs::write(&path, serde_json::to_string(&body).unwrap()).unwrap();
+        assert!(read().is_none(), "a future timestamp was treated as fresh");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cached_catalogue_survives_a_round_trip() {
+        // The cache is written by this build and read by the next one, so the
+        // map's own fields have to survive serde in both directions.
+        let maps = parse_catalogue(SAMPLE);
+        let body = CachedCatalogue { fetched: 1, maps: maps.clone() };
+        let text = serde_json::to_string(&body).unwrap();
+        let back: CachedCatalogue = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.maps, maps);
+        assert_eq!(back.maps[0].height_elmos, Some(16 * 512));
     }
 
     #[test]

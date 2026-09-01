@@ -185,6 +185,51 @@ pub fn sp_units(game: State<'_, Game>) -> crate::game::Roster {
     }
 }
 
+/// Pictures for the named units, as `data:` URIs.
+///
+/// Empty rather than an error when there is no install: the editor draws the
+/// plain markers it always drew, and a machine without Zero-K can still author
+/// a scenario.
+#[tauri::command]
+pub fn sp_unit_icons(
+    game: State<'_, Game>,
+    names: Vec<String>,
+) -> std::collections::HashMap<String, String> {
+    let Some(root) = game.install_root() else { return Default::default() };
+    let Some(archive) = crate::game::base_game(&root) else { return Default::default() };
+    let defs = crate::game::read_unit_defs(&archive.path).unwrap_or_default();
+    crate::game::unit_icons(&archive.path, &defs, &names)
+}
+
+/// Zoom-out icons for the named units, decoded to RGBA.
+///
+/// Separate from `sp_unit_icons`, which returns build pictures: these are the
+/// flat silhouettes the game draws when you zoom out, and they are what stays
+/// readable at the size a map marker actually is.
+#[tauri::command]
+pub fn sp_unit_marks(
+    game: State<'_, Game>,
+    names: Vec<String>,
+) -> std::collections::HashMap<String, crate::game::Mark> {
+    let Some(root) = game.install_root() else { return Default::default() };
+    let Some(archive) = crate::game::base_game(&root) else { return Default::default() };
+    let defs = crate::game::read_unit_defs(&archive.path).unwrap_or_default();
+    crate::game::unit_marks(&archive.path, &defs, &names)
+}
+
+/// The metal infomap for a map, if its archive can be found and read.
+///
+/// `None` rather than an error throughout: a map that is not installed, or one
+/// whose archive this cannot open, means the editor draws no metal - which is
+/// what it did before - not that the scenario is broken.
+#[tauri::command]
+pub fn sp_map_metal(game: State<'_, Game>, map: String) -> Option<crate::mapfile::MetalMap> {
+    let root = game.install_root()?;
+    let archive = crate::mapfile::map_archive(&root, &map)?;
+    let smf = crate::mapfile::smf_bytes(&archive)?;
+    crate::mapfile::metal_map(&smf)
+}
+
 /// Start the engine on a script somebody else wrote.
 ///
 /// `running` is cleared however it ends, and the exit is announced, so the

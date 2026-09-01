@@ -1,9 +1,11 @@
 mod campaign;
 mod container;
 mod customkey;
+mod dds;
 mod game;
 mod install;
 mod launch;
+mod mapfile;
 mod maps;
 mod preset;
 mod scenario;
@@ -19,6 +21,9 @@ pub fn run() {
             launch::sp_launch_preview,
             launch::sp_game_info,
             launch::sp_units,
+            launch::sp_unit_icons,
+            launch::sp_unit_marks,
+            launch::sp_map_metal,
             maps::sp_maps,
             scenario::spsc_script,
             scenario::spsc_problems,

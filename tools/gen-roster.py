@@ -38,12 +38,22 @@ def main(root):
         # agree, and damagesinkrock.lua defines `rocksink`.
         m = re.search(r'return\s*\{\s*([A-Za-z0-9_]+)\s*=', src)
         key = m.group(1) if m else name[:-4]
-        units[key] = {
+        entry = {
             "name": key,
             "title": field(src, "name") or key,
             "description": field(src, "description"),
             "group": "Other",
         }
+        # Not <name>.png: 29 units disagree with that guess and 11 declare
+        # nothing, so the wrong picture would end up on the wrong unit.
+        pic = field(src, "buildPic")
+        if pic:
+            entry["buildPic"] = pic
+        # The zoom-out icon, which is shared: 275 units draw from 204 types.
+        icon = field(src, "iconType")
+        if icon:
+            entry["iconType"] = icon
+        units[key] = entry
         opts = re.search(r'buildoptions\s*=\s*\{(.*?)\}', src, re.S)
         if opts:
             built = re.findall(r'\[\[(.*?)\]\]', opts.group(1))

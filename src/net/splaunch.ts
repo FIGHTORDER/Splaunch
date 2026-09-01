@@ -156,7 +156,14 @@ export async function gameInfo(): Promise<GameInfo> {
   return invoke<GameInfo>("sp_game_info");
 }
 
-export interface UnitDef { name: string; title: string; description: string; group: string }
+export interface UnitDef {
+  name: string;
+  title: string;
+  description: string;
+  group: string;
+  /** The file in `unitpics/` that draws it. Not `<name>.png` for 29 of them. */
+  buildPic?: string;
+}
 export interface Roster { source: string; units: UnitDef[] }
 
 /**
@@ -168,6 +175,52 @@ export interface Roster { source: string; units: UnitDef[] }
 export async function units(): Promise<Roster> {
   if (!inTauri()) return { source: "", units: [] };
   return invoke<Roster>("sp_units");
+}
+
+/**
+ * Pictures for the named units, as `data:` URIs.
+ *
+ * Asked for by name rather than fetched wholesale: the archive holds 366 and a
+ * scenario places a dozen. A unit with no picture is absent from the result
+ * rather than an error - a missing icon should not become a missing unit.
+ */
+export async function unitIcons(names: string[]): Promise<Record<string, string>> {
+  if (!inTauri() || !names.length) return {};
+  return invoke<Record<string, string>>("sp_unit_icons", { names });
+}
+
+/** A decoded image, ready for `putImageData`. */
+export interface Rgba { width: number; height: number; pixels: string }
+
+/**
+ * Zoom-out icons for the named units, decoded to RGBA.
+ *
+ * These are the flat silhouettes the game draws when you zoom out, and they
+ * are what stays readable at the size a map marker actually is - a build
+ * picture is a lit 3D render that turns to mush at twenty pixels.
+ */
+export async function unitMarks(names: string[]): Promise<Record<string, Rgba>> {
+  if (!inTauri() || !names.length) return {};
+  return invoke<Record<string, Rgba>>("sp_unit_marks", { names });
+}
+
+/** A map's metal infomap: one byte a sample, sixteen elmos to a sample. */
+export interface MetalMap { width: number; height: number; samples: string }
+
+/**
+ * Where the metal is on a map, read out of its own archive.
+ *
+ * Density rather than a list of spots, deliberately: what counts as "a spot" is
+ * a choice, and two reasonable choices give two different answers from the same
+ * map. Coilbox pins those numbers in a shared catalogue so clients agree, and
+ * inventing a second definition here is exactly the divergence that exists to
+ * prevent. See `src-tauri/src/mapfile.rs`.
+ *
+ * `null` when the map is not installed or its archive cannot be read.
+ */
+export async function mapMetal(map: string): Promise<MetalMap | null> {
+  if (!inTauri() || !map) return null;
+  return invoke<MetalMap | null>("sp_map_metal", { map });
 }
 
 /** The script this scenario would produce, without launching it. */
@@ -234,6 +287,23 @@ export async function testScenario(
 export async function saveScenario(scenario: Scenario): Promise<string | null> {
   if (!inTauri()) throw new Error("Saving needs the desktop app.");
   return invoke<string | null>("spsc_save", { scenario });
+}
+
+/**
+ * Pack this scenario as a one-mission campaign, asking where to write it.
+ *
+ * A campaign of one is a real campaign, and this is the path from "I made a
+ * mission" to "somebody else can play it": the mission ships compiled, with the
+ * three values that cannot travel between machines written as markers for the
+ * loader to fill in. `src-tauri/src/campaign.rs` has the format.
+ *
+ * Resolves to `null` if the dialog was dismissed, which is not an error.
+ */
+export async function exportCampaign(
+  scenario: Scenario, author: string,
+): Promise<string | null> {
+  if (!inTauri()) throw new Error("Exporting needs the desktop app.");
+  return invoke<string | null>("spsc_export_campaign", { scenario, author });
 }
 
 /** Open one, asking which. Resolves to `null` if the dialog was dismissed. */

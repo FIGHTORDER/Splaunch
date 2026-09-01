@@ -24,6 +24,7 @@
 //! empty list and a sentence saying so, not an error that stops the editor
 //! opening. The authority is always the install, never this file.
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -50,6 +51,21 @@ pub struct UnitDef {
     /// For grouping the palette: the factory that builds it where one does,
     /// and a name-derived group otherwise.
     pub group: String,
+    /// The file in `unitpics/` that draws this unit, as the definition names it.
+    ///
+    /// Not `<name>.png`: 29 of the roster's units disagree with that guess and
+    /// 11 declare nothing at all - `dynknight1` is drawn by `cremcom.png` and
+    /// `terraunit` by `levelterra.png`. Guessing would put the wrong picture on
+    /// a unit, which is worse than none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_pic: Option<String>,
+    /// The zoom-out icon this unit uses, by icon type rather than by name.
+    ///
+    /// Zero-K's icons are shared: 275 units draw from 204 types, so a Glaive
+    /// and every other light raider bot are one silhouette. `icontypes.lua`
+    /// turns the type into a file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_type: Option<String>,
 }
 
 // ------------------------------------------------------------- engines -----
@@ -673,6 +689,8 @@ pub fn read_unit_defs(archive: &Path) -> Result<Vec<UnitDef>, String> {
         units.push(UnitDef {
             title: lua_field(&source, "name").unwrap_or_else(|| name.clone()),
             description: lua_field(&source, "description").unwrap_or_default(),
+            build_pic: lua_field(&source, "buildpic"),
+            icon_type: lua_field(&source, "icontype"),
             group: String::new(),
             name,
         });
@@ -711,6 +729,249 @@ fn sort_key(u: &UnitDef) -> (u8, &str, &str) {
         _ => 0,
     };
     (rank, &u.group, &u.title)
+}
+
+// ---------------------------------------------------------------- icons -----
+
+/// Standard base64, for a `data:` URI.
+///
+/// Not `customkey`'s: that one is Zero-K's URL-safe alphabet, written to survive
+/// a decoder with two faults in it. A browser wants the ordinary one, and the
+/// two differ in the last two characters and would silently corrupt an image.
+pub fn base64_standard(data: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = |i: usize| *chunk.get(i).unwrap_or(&0) as u32;
+        let n = (b(0) << 16) | (b(1) << 8) | b(2);
+        out.push(A[(n >> 18) as usize & 63] as char);
+        out.push(A[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { A[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { A[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+/// The picture for each of `wanted`, as `data:` URIs.
+///
+/// Batched and by request rather than all at once: the archive holds 366 of
+/// these, and handing every one across the bridge to draw the dozen a scenario
+/// actually places would be megabytes for nothing.
+///
+/// A unit with no picture is simply absent from the result. The caller draws
+/// what it drew before, which is the honest outcome - a missing icon should not
+/// be a missing unit.
+pub fn unit_icons(archive: &Path, defs: &[UnitDef], wanted: &[String]) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Ok(file) = std::fs::File::open(archive) else { return out };
+    let Ok(mut zip) = zip::ZipArchive::new(std::io::BufReader::new(file)) else { return out };
+
+    // The archive's own spelling, indexed once: Spring's VFS is case-insensitive
+    // and the definitions do not agree with the files on capitalisation.
+    let mut pics: HashMap<String, usize> = HashMap::new();
+    for i in 0..zip.len() {
+        if let Ok(entry) = zip.by_index_raw(i) {
+            let name = entry.name().to_ascii_lowercase();
+            if let Some(file) = name.strip_prefix("unitpics/") {
+                if !file.is_empty() {
+                    pics.insert(file.to_string(), i);
+                }
+            }
+        }
+    }
+
+    for name in wanted {
+        let def = defs.iter().find(|d| &d.name == name);
+        // The declared picture first, then the name, because 29 units disagree
+        // with the guess and 11 declare nothing.
+        let candidates = [
+            def.and_then(|d| d.build_pic.clone()),
+            Some(format!("{name}.png")),
+        ];
+        let Some(index) = candidates
+            .iter()
+            .flatten()
+            .find_map(|f| pics.get(&f.to_ascii_lowercase()).copied())
+        else {
+            continue;
+        };
+        let Ok(mut entry) = zip.by_index(index) else { continue };
+        let mut bytes = Vec::new();
+        if std::io::Read::read_to_end(&mut entry, &mut bytes).is_err() || bytes.is_empty() {
+            continue;
+        }
+        let kind = if entry.name().to_ascii_lowercase().ends_with(".jpg") {
+            "jpeg"
+        } else {
+            "png"
+        };
+        out.insert(
+            name.clone(),
+            format!("data:image/{kind};base64,{}", base64_standard(&bytes)),
+        );
+    }
+    out
+}
+
+/// Icon type to the file that draws it, from the game's own `icontypes.lua`.
+///
+/// The copy at `gamedata/` is a one-line `VFS.Include` of the real one, which
+/// lives under `LuaUI/Configs` so the interface can read it too. Reading the
+/// stub gets a redirect rather than a table.
+fn icon_types(zip: &mut zip::ZipArchive<std::io::BufReader<std::fs::File>>) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Some(index) = (0..zip.len()).find(|i| {
+        zip.by_index_raw(*i)
+            .map(|e| e.name().eq_ignore_ascii_case("luaui/configs/icontypes.lua"))
+            .unwrap_or(false)
+    }) else {
+        return out;
+    };
+    let Ok(mut entry) = zip.by_index(index) else { return out };
+    let mut source = String::new();
+    if entry.read_to_string(&mut source).is_err() {
+        return out;
+    }
+
+    /* `name = { bitmap='icons/x.dds', size=1.3 },` - taken by scanning for the
+       bitmap and walking back to the name that opened its block, rather than by
+       parsing Lua. The file is a flat table of literals and has been since
+       2009. */
+    let mut at = 0;
+    while let Some(i) = source[at..].find("bitmap") {
+        let start = at + i;
+        at = start + "bitmap".len();
+        let Some(open) = source[..start].rfind('{') else { continue };
+        let Some(eq) = source[..open].rfind('=') else { continue };
+        let name: String = source[..eq]
+            .trim_end()
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let rest = source[at..].trim_start().trim_start_matches('=').trim_start();
+        let Some(quote) = rest.chars().next().filter(|c| *c == '\'' || *c == '"') else { continue };
+        let body = &rest[1..];
+        let Some(end) = body.find(quote) else { continue };
+        if !name.is_empty() {
+            out.insert(name, body[..end].to_string());
+        }
+    }
+    out
+}
+
+/// The zoom-out icon for each of `wanted`, decoded to RGBA.
+///
+/// These beat the build pictures on a map: a build picture is a lit 3D render
+/// that turns to mush at twenty pixels, and these were drawn to be read at
+/// exactly that size. They are DDS, so `dds` decodes them - see there for why
+/// preferring the PNG beside them is not enough.
+/// A unit's zoom-out icon, however the archive happens to store it.
+///
+/// Two shapes because the game uses two: most icon types are `.dds`, which no
+/// browser will draw and which `dds` decodes to raw pixels, but 65 of the
+/// roster's units point at a `.png`, which the browser draws perfectly well on
+/// its own. Decoding a PNG here would mean shipping a PNG decoder to undo work
+/// the browser does for free.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Mark {
+    pub width: u32,
+    pub height: u32,
+    /// RGBA, base64, when it came out of a `.dds`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pixels: Option<String>,
+    /// A `data:` URI, when the archive already had something drawable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub src: Option<String>,
+}
+
+pub fn unit_marks(
+    archive: &Path,
+    defs: &[UnitDef],
+    wanted: &[String],
+) -> HashMap<String, Mark> {
+    let mut out = HashMap::new();
+    let Ok(file) = std::fs::File::open(archive) else { return out };
+    let Ok(mut zip) = zip::ZipArchive::new(std::io::BufReader::new(file)) else { return out };
+    let types = icon_types(&mut zip);
+    if types.is_empty() {
+        return out;
+    }
+
+    let mut index: HashMap<String, usize> = HashMap::new();
+    for i in 0..zip.len() {
+        if let Ok(entry) = zip.by_index_raw(i) {
+            index.insert(entry.name().to_ascii_lowercase(), i);
+        }
+    }
+
+    // One decode per icon type, not per unit: 275 units share 204 types, and
+    // every light raider bot is the same silhouette.
+    let mut decoded: HashMap<String, Option<Mark>> = HashMap::new();
+    for name in wanted {
+        let Some(def) = defs.iter().find(|d| &d.name == name) else { continue };
+        let Some(icon) = def.icon_type.as_deref() else { continue };
+        let Some(bitmap) = types.get(icon) else { continue };
+
+        let entry = decoded.entry(bitmap.clone()).or_insert_with(|| {
+            let lower = bitmap.to_ascii_lowercase();
+            /* The type table names one file, but an archive often ships the
+               same icon both ways. Take whichever is there, preferring the one
+               the browser can draw without a decoder. */
+            let png = lower.rsplit_once('.').map(|(stem, _)| format!("{stem}.png"));
+            let at = png
+                .as_deref()
+                .and_then(|p| index.get(p))
+                .or_else(|| index.get(&lower))
+                .copied()?;
+            let mut file = zip.by_index(at).ok()?;
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes).ok()?;
+            let is_png = file.name().to_ascii_lowercase().ends_with(".png");
+            if is_png {
+                // The browser decodes it; we only have to say how big it is,
+                // and a PNG says so in the eight bytes after its signature.
+                let dims = png_size(&bytes)?;
+                return Some(Mark {
+                    width: dims.0,
+                    height: dims.1,
+                    pixels: None,
+                    src: Some(format!("data:image/png;base64,{}", base64_standard(&bytes))),
+                });
+            }
+            let image = crate::dds::decode(&bytes)?;
+            Some(Mark {
+                width: image.width,
+                height: image.height,
+                pixels: Some(image.pixels),
+                src: None,
+            })
+        });
+        if let Some(image) = entry {
+            out.insert(name.clone(), image.clone());
+        }
+    }
+    out
+}
+
+/// A PNG's dimensions, from its `IHDR`.
+///
+/// Eight bytes of signature, then a four-byte length and the tag `IHDR`, then
+/// width and height as big-endian `u32`s.
+fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    if !bytes.starts_with(&[0x89, b'P', b'N', b'G']) || bytes.get(12..16)? != b"IHDR" {
+        return None;
+    }
+    let be = |at: usize| -> Option<u32> {
+        let s = bytes.get(at..at + 4)?;
+        Some(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
+    };
+    let (w, h) = (be(16)?, be(20)?);
+    (w > 0 && h > 0 && w <= 4096 && h <= 4096).then_some((w, h))
 }
 
 // ------------------------------------------------------------- commands -----
@@ -1076,6 +1337,227 @@ return modinfo"#;
         assert!(map_is_installed(&installed, "Comet Catcher Redux"));
         assert!(map_is_installed(&installed, "Glacies 1.3"));
         assert!(!map_is_installed(&installed, "Some Other Map"));
+    }
+
+    #[test]
+    fn base64_matches_the_standard_alphabet() {
+        /* Not customkey's. That one is Zero-K's URL-safe alphabet, and the two
+           differ in the last two characters - a browser handed one would show a
+           corrupt image for any byte that encodes to 62 or 63. */
+        assert_eq!(base64_standard(b""), "");
+        assert_eq!(base64_standard(b"a"), "YQ==");
+        assert_eq!(base64_standard(b"ab"), "YWI=");
+        assert_eq!(base64_standard(b"abc"), "YWJj");
+        // 0xFB 0xEF encodes to sextets 62 and 63, which is where the alphabets
+        // part company: standard says `+/`, Zero-K's says `-_`.
+        assert_eq!(base64_standard(&[0xFB, 0xEF, 0xBE]), "++++");
+    }
+
+    /// A zip in memory with these entries, for the archive readers.
+    fn archive_with(entries: &[(&str, &[u8])]) -> std::path::PathBuf {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join("splaunch-icon-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("a{}.sdz", entries.len()));
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default();
+        for (name, body) in entries {
+            zip.start_file(*name, opts).unwrap();
+            zip.write_all(body).unwrap();
+        }
+        zip.finish().unwrap();
+        path
+    }
+
+    #[test]
+    fn an_icon_comes_from_the_picture_the_unit_declares() {
+        /* `dynknight1` is drawn by `cremcom.png`. Reading `<name>.png` would
+           find nothing for it and, worse, would find the wrong picture for any
+           unit whose name happens to match somebody else's file. */
+        let archive = archive_with(&[
+            ("unitpics/cremcom.png", b"KNIGHT"),
+            ("unitpics/cloakraid.png", b"GLAIVE"),
+        ]);
+        let defs = vec![
+            UnitDef {
+                name: "dynknight1".into(),
+                title: "Knight".into(),
+                description: String::new(),
+                group: "Commanders".into(),
+                build_pic: Some("cremcom.png".into()),
+                icon_type: None,
+            },
+            UnitDef {
+                name: "cloakraid".into(),
+                title: "Glaive".into(),
+                description: String::new(),
+                group: "Cloakbot Factory".into(),
+                build_pic: None,
+                icon_type: None,
+            },
+        ];
+        let icons = unit_icons(&archive, &defs, &["dynknight1".into(), "cloakraid".into()]);
+
+        assert_eq!(
+            icons.get("dynknight1").map(String::as_str),
+            Some(format!("data:image/png;base64,{}", base64_standard(b"KNIGHT")).as_str()),
+            "the declared picture was not used"
+        );
+        // No buildPic declared, so `<name>.png` is the fallback rather than the rule.
+        assert!(icons.get("cloakraid").unwrap().ends_with(&base64_standard(b"GLAIVE")));
+    }
+
+    #[test]
+    fn a_unit_with_no_picture_is_absent_rather_than_broken() {
+        // A missing icon must not become a missing unit: the caller draws the
+        // marker it drew before.
+        let archive = archive_with(&[("unitpics/other.png", b"x")]);
+        let defs = vec![UnitDef {
+            name: "ghost".into(),
+            title: "Ghost".into(),
+            description: String::new(),
+            group: "Other".into(),
+            build_pic: None,
+            icon_type: None,
+        }];
+        assert!(unit_icons(&archive, &defs, &["ghost".into()]).is_empty());
+    }
+
+    #[test]
+    fn the_archives_own_capitalisation_is_not_assumed() {
+        // Spring's VFS is case-insensitive and the definitions do not agree
+        // with the files on capitalisation.
+        let archive = archive_with(&[("UnitPics/CloakRaid.PNG", b"GLAIVE")]);
+        let defs = vec![UnitDef {
+            name: "cloakraid".into(),
+            title: "Glaive".into(),
+            description: String::new(),
+            group: "Cloakbot Factory".into(),
+            build_pic: Some("cloakraid.png".into()),
+            icon_type: None,
+        }];
+        assert!(unit_icons(&archive, &defs, &["cloakraid".into()]).contains_key("cloakraid"));
+    }
+
+    #[test]
+    fn the_vendored_roster_carries_the_pictures() {
+        let units = vendored_units();
+        let with_pic = units.iter().filter(|u| u.build_pic.is_some()).count();
+        assert!(with_pic > 250, "only {with_pic} units declare a picture");
+        let knight = units.iter().find(|u| u.name == "dynknight1").unwrap();
+        assert_eq!(knight.build_pic.as_deref(), Some("cremcom.png"));
+    }
+
+    #[test]
+    fn icon_types_are_read_out_of_the_config() {
+        use std::io::Write;
+        // The real file's shape, from LuaUI/Configs/icontypes.lua.
+        let config = br#"local icontypes = {
+  default = {
+    size=1.3,
+  },
+  commander0 = {
+    bitmap='icons/armcommander.dds',
+    size=1.9,
+  },
+
+-- a comment between entries
+  kbotraider = {
+    bitmap='icons/kbotraider.dds',
+    size=1.1,
+  },
+}
+return icontypes"#;
+        let dir = std::env::temp_dir().join("splaunch-icontypes-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("g.sdz");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut w = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default();
+        w.start_file("LuaUI/Configs/icontypes.lua", opts).unwrap();
+        w.write_all(config).unwrap();
+        w.finish().unwrap();
+
+        let f = std::fs::File::open(&path).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::BufReader::new(f)).unwrap();
+        let types = icon_types(&mut zip);
+        assert_eq!(types.get("kbotraider").map(String::as_str), Some("icons/kbotraider.dds"));
+        assert_eq!(types.get("commander0").map(String::as_str), Some("icons/armcommander.dds"));
+        // An entry with no bitmap is not an icon.
+        assert!(!types.contains_key("default"));
+    }
+
+    /// Decode real icons through the whole path: an archive shaped like the
+    /// game's, its own `icontypes.lua`, its own `.dds` files.
+    ///
+    /// ```text
+    /// SPLAUNCH_TEST_ZK_SRC=/path/to/Zero-K \
+    ///   cargo test --lib -- --ignored --nocapture unit_marks
+    /// ```
+    ///
+    /// Writes the result to `SPLAUNCH_TEST_MARKS_OUT` when set, which is how the
+    /// browser harness gets real pixels to draw.
+    #[test]
+    #[ignore = "needs a Zero-K checkout in SPLAUNCH_TEST_ZK_SRC"]
+    fn real_unit_marks_decode_end_to_end() {
+        use std::io::Write;
+        let src = std::path::PathBuf::from(
+            std::env::var("SPLAUNCH_TEST_ZK_SRC").expect("set SPLAUNCH_TEST_ZK_SRC"),
+        );
+        let dir = std::env::temp_dir().join("splaunch-marks-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let archive = dir.join("zk-stable.sdz");
+
+        let file = std::fs::File::create(&archive).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file("LuaUI/Configs/icontypes.lua", opts).unwrap();
+        zip.write_all(&std::fs::read(src.join("LuaUI/Configs/icontypes.lua")).unwrap())
+            .unwrap();
+        for entry in std::fs::read_dir(src.join("icons")).unwrap().flatten() {
+            let path = entry.path();
+            // Both, because the archive ships both and the reader prefers
+            // whichever the browser can draw without help.
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default();
+            if !ext.eq_ignore_ascii_case("dds") && !ext.eq_ignore_ascii_case("png") {
+                continue;
+            }
+            let name = format!("icons/{}", path.file_name().unwrap().to_string_lossy());
+            zip.start_file(&name, opts).unwrap();
+            zip.write_all(&std::fs::read(&path).unwrap()).unwrap();
+        }
+        zip.finish().unwrap();
+
+        let defs = vendored_units();
+        let wanted: Vec<String> = defs.iter().map(|d| d.name.clone()).collect();
+        let marks = unit_marks(&archive, &defs, &wanted);
+        println!("{} of {} units got a mark", marks.len(), wanted.len());
+        /* Not every unit has one: some declare no icon type and some point at a
+           type the table does not define. What matters is that the great
+           majority resolve, and that both storage shapes are exercised. */
+        assert!(
+            marks.len() > 240,
+            "only {} units resolved to an icon - the type table or the paths are wrong",
+            marks.len()
+        );
+        let from_dds = marks.values().filter(|m| m.pixels.is_some()).count();
+        let from_png = marks.values().filter(|m| m.src.is_some()).count();
+        println!("  {from_dds} decoded from .dds, {from_png} handed over as .png");
+        assert!(from_dds > 0 && from_png > 0, "one of the two paths never ran");
+        let glaive = marks.get("cloakraid").expect("the Glaive has no mark");
+        assert!(glaive.width >= 32 && glaive.height >= 32);
+
+        if let Ok(out) = std::env::var("SPLAUNCH_TEST_MARKS_OUT") {
+            let sample: std::collections::HashMap<_, _> = marks
+                .iter()
+                .filter(|(n, _)| {
+                    ["armcom1", "corcom1", "cloakraid", "turretlaser", "energysolar", "staticmex"]
+                        .contains(&n.as_str())
+                })
+                .collect();
+            std::fs::write(out, serde_json::to_string(&sample).unwrap()).unwrap();
+        }
     }
 
     #[test]

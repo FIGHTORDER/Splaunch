@@ -5,8 +5,10 @@ import {
 import { label, hint, mono } from "./parts.jsx";
 import Minimap, { MinimapCaption, mapAspect, containBox } from "./Minimap.jsx";
 import Objectives from "./Objectives.jsx";
-import Teams, { colourOf } from "./Teams.jsx";
+import Teams, { colourOf, rgbOf, NEUTRAL_RGB } from "./Teams.jsx";
 import Selection from "./Selection.jsx";
+import { useUnitIcons, useUnitMarks, UnitMark } from "./icons.jsx";
+import MetalOverlay, { useMetalMap } from "./Metal.jsx";
 import {
   scenarioProblems, scenarioWarnings, scenarioScript, saveScenario, openScenario,
   exampleScenario, importPreset, exportPreset,
@@ -44,7 +46,7 @@ function featureNames(roster) {
     .map(u => ({ name: `${u.name}_dead`, title: `${u.title} wreck`, group: u.group }));
 }
 
-function Palette({ mode, setMode, query, setQuery, brush, setBrush, roster, source }) {
+function Palette({ mode, setMode, query, setQuery, brush, setBrush, roster, source, icons, onShown }) {
   const items = React.useMemo(
     () => (mode === "unit" ? roster : mode === "feature" ? featureNames(roster) : []),
     [mode, roster],
@@ -64,6 +66,20 @@ function Palette({ mode, setMode, query, setQuery, brush, setBrush, roster, sour
     }
     return [...byGroup.entries()];
   }, [items, query]);
+
+  /* A screenful and a bit, capped across the whole list rather than per group.
+     Per group is not a cap at all: twenty-four groups of forty is the entire
+     roster, which is the megabytes this exists to avoid. Searching narrows the
+     list, so the way to reach a unit far down it is to type its name - which is
+     how anybody finds one unit among 275 anyway. */
+  const PALETTE_ICON_BUDGET = 60;
+  const shown = React.useMemo(
+    () => groups.flatMap(([, list]) => list)
+      .slice(0, PALETTE_ICON_BUDGET)
+      .map(i => i.name.replace(/_dead$/, "")),
+    [groups],
+  );
+  React.useEffect(() => { onShown?.(shown); }, [shown, onShown]);
 
   return (
     <div style={{ width: 236, flex: "0 0 auto", display: "flex", flexDirection: "column",
@@ -97,13 +113,28 @@ function Palette({ mode, setMode, query, setQuery, brush, setBrush, roster, sour
                       background: on ? "var(--surface-inverse)" : "transparent",
                       color: on ? "var(--text-inverse)" : "var(--text-body)",
                       border: "1px solid " + (on ? "var(--surface-inverse)" : "var(--w-12)"),
-                      overflow: "hidden" }}>
-                    <span style={{ font: "var(--w-medium) var(--size-tiny)/1.3 var(--font-core)",
-                      display: "block", overflow: "hidden", textOverflow: "ellipsis",
-                      whiteSpace: "nowrap" }}>{item.title}</span>
-                    <span style={{ font: "var(--w-regular) var(--size-micro)/1.3 var(--font-mono)",
-                      opacity: 0.7, display: "block", overflow: "hidden",
-                      textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
+                      overflow: "hidden", display: "flex", alignItems: "center",
+                      gap: "var(--sp-3)" }}>
+                    {/* The wreck palette names `<unit>_dead`; the picture is
+                        the unit's, because a corpse has none of its own. */}
+                    <span style={{ width: 26, height: 26, flex: "0 0 auto",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      background: "rgba(0,0,0,.06)" }}>
+                      {icons[item.name.replace(/_dead$/, "")] && (
+                        <img src={icons[item.name.replace(/_dead$/, "")]} alt=""
+                          draggable={false}
+                          style={{ width: "100%", height: "100%", objectFit: "contain",
+                            opacity: item.name.endsWith("_dead") ? 0.55 : 1 }} />
+                      )}
+                    </span>
+                    <span style={{ minWidth: 0, flex: 1 }}>
+                      <span style={{ font: "var(--w-medium) var(--size-tiny)/1.3 var(--font-core)",
+                        display: "block", overflow: "hidden", textOverflow: "ellipsis",
+                        whiteSpace: "nowrap" }}>{item.title}</span>
+                      <span style={{ font: "var(--w-regular) var(--size-micro)/1.3 var(--font-mono)",
+                        opacity: 0.7, display: "block", overflow: "hidden",
+                        textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
+                    </span>
                   </button>
                 );
               })}
@@ -174,7 +205,18 @@ export default function SplaunchScreen({
   const [blockedOpen, setBlockedOpen] = React.useState(false);
   const [saved, setSaved] = React.useState(undefined);
   const [script, setScript] = React.useState(undefined);
+  const [paletteShown, setPaletteShown] = React.useState([]);
+  const [showMetal, setShowMetal] = React.useState(true);
   const boardRef = React.useRef(null);
+
+  /* Build pictures for the palette, which is where a unit is recognised, and
+     zoom-out silhouettes for the map, which is where one has to be read at
+     twenty pixels. Different art for different sizes rather than one stretched
+     to do both. */
+  const icons = useUnitIcons(paletteShown);
+  const metal = useMetalMap(map);
+  const placedNames = React.useMemo(() => units.map(u => u.unit), [units]);
+  const marks = useUnitMarks(placedNames);
   const stageRef = React.useRef(null);
   const [stage, setStage] = React.useState({ w: 0, h: 0 });
 
@@ -484,6 +526,14 @@ export default function SplaunchScreen({
         <Button variant="ghost" size="sm" icon="share" onClick={savePreset}
           title="Write the battle - map, game, sides, modoptions - as a Coilbox preset">
           Preset</Button>
+        {/* The packer has been in the Rust with nothing able to reach it. A
+            campaign is how a mission gets to somebody else's machine: the
+            script travels compiled, with the map, the game and the player
+            written as markers for the loader to substitute. */}
+        <Button variant="ghost" size="sm" icon="package"
+          onClick={() => exportCampaign(scenario, player).then(
+            p => setSaved(p ? `Campaign written to ${p}` : undefined),
+            e => setSaved(`Could not write the campaign: ${String(e?.message ?? e)}`))}>Campaign</Button>
         <Button variant="ghost" size="sm" icon="save"
           onClick={() => saveScenario(scenario).then(
             p => setSaved(p ? `Saved to ${p}` : undefined), () => {})}>Save</Button>
@@ -511,7 +561,8 @@ export default function SplaunchScreen({
 
       <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
         <Palette mode={mode} setMode={setMode} query={paletteQuery} setQuery={setPaletteQuery}
-          brush={brush} setBrush={setBrush} roster={roster} source={rosterIn.source} />
+          brush={brush} setBrush={setBrush} roster={roster} source={rosterIn.source}
+          icons={icons} onShown={setPaletteShown} />
 
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
           <div ref={stageRef}
@@ -522,6 +573,8 @@ export default function SplaunchScreen({
                 cursor: "crosshair", border: "1px solid var(--w-20)" }}>
               <Minimap map={map} saturate={0.7}
                 style={{ position: "absolute", inset: 0 }} />
+
+              {showMetal && <MetalOverlay metal={metal} />}
 
               {/* Patrol routes, under everything so the pieces stay clickable. */}
               <svg viewBox={`0 0 ${mapElmos} ${mapDepth}`} preserveAspectRatio="none"
@@ -575,18 +628,21 @@ export default function SplaunchScreen({
               ))}
 
               {units.map(u => (
-                <button key={u.key} type="button" title={`${u.unit} (${u.x}, ${u.z})`}
+                <button key={u.key} type="button"
+                  title={`${roster.find(r => r.name === u.unit)?.title ?? u.unit} (${u.x}, ${u.z})`}
                   onClick={e => { e.stopPropagation(); setSel({ kind: "unit", key: u.key }); setTab("selection"); }}
                   style={{ position: "absolute",
                     left: `${(u.x / mapElmos) * 100}%`, top: `${(u.z / mapDepth) * 100}%`,
                     transform: "translate(-50%, -50%)",
-                    width: sel?.key === u.key ? 14 : 11, height: sel?.key === u.key ? 14 : 11,
-                    padding: 0, cursor: "pointer", border: 0,
-                    borderRadius: u.neutral ? "50%" : 0,
-                    background: u.neutral ? "#8b8b8b" : colourOf(u.team).css,
-                    boxShadow: sel?.key === u.key
-                      ? "0 0 0 1px #000, 0 0 0 3px #fff"
-                      : "0 0 0 1px rgba(0,0,0,.6)" }} />
+                    padding: 0, cursor: "pointer", border: 0, background: "none",
+                    lineHeight: 0 }}>
+                  <UnitMark
+                    mark={marks[u.unit]}
+                    colour={u.neutral ? NEUTRAL_RGB : rgbOf(u.team)}
+                    selected={sel?.key === u.key}
+                    neutral={u.neutral}
+                  />
+                </button>
               ))}
             </div>
           </div>
@@ -615,6 +671,10 @@ export default function SplaunchScreen({
                   : `Click to place ${brush || "—"}`}
             </span>
             <span style={{ flex: 1 }} />
+            {metal && (
+              <Button size="sm" variant={showMetal ? "primary" : "secondary"}
+                onClick={() => setShowMetal(v => !v)}>Metal</Button>
+            )}
             <span style={label}>
               {units.length} units · {features.length} wrecks · {markers.length} marks
             </span>
@@ -763,7 +823,7 @@ export default function SplaunchScreen({
           whiteSpace: "pre", margin: 0 }}>{script}</pre>
       </Dialog>
 
-      <Dialog open={!!saved} title="Saved" width={420} onClose={() => setSaved(undefined)}
+      <Dialog open={!!saved} title="Written" width={480} onClose={() => setSaved(undefined)}
         footer={<Button variant="primary" onClick={() => setSaved(undefined)}>Close</Button>}>
         <span style={{ ...mono, wordBreak: "break-all" }}>{saved}</span>
       </Dialog>

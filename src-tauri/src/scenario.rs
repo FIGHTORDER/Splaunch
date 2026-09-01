@@ -358,7 +358,9 @@ pub fn warnings(s: &Scenario) -> Vec<String> {
         let (x, z) = team_start(s, t.id);
         let whose = if t.ai.is_none() { "your team" } else { "team" };
         out.push(format!(
-            "Zero-K gives {whose} {} a commander whether or not you place one.              With none placed it will start at {}, {} - {}. Place a commander to say where.",
+            "Zero-K gives {whose} {} a commander whether or not you place one. \
+             With none placed it will start at {}, {} - {}. Place a commander \
+             to say where.",
             t.id,
             x as i64,
             z as i64,

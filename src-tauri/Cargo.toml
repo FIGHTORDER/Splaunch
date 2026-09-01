@@ -27,6 +27,7 @@ zip = { version = "4.2.0", default-features = false, features = ["deflate"] }
 # `zip`, so naming it here costs nothing new.
 flate2 = "1"
 tauri-plugin-dialog = "2.0.0-rc.8"
+sevenz-rust2 = "0.7.0"
 
 [profile.release]
 strip = true

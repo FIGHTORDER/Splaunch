@@ -3,1399 +3,1863 @@
   "name": "planecon",
   "title": "Crane",
   "description": "Construction Aircraft",
-  "group": "Airplane Plant"
+  "group": "Airplane Plant",
+  "buildPic": "planecon.png",
+  "iconType": "builderair"
  },
  {
   "name": "bomberheavy",
   "title": "Likho",
   "description": "Singularity Bomber",
-  "group": "Airplane Plant"
+  "group": "Airplane Plant",
+  "buildPic": "bomberheavy.png",
+  "iconType": "bombernuke"
  },
  {
   "name": "bomberstrike",
   "title": "Magpie",
   "description": "Tactical Strike Bomber",
-  "group": "Airplane Plant"
+  "group": "Airplane Plant",
+  "buildPic": "bomberstrike.png",
+  "iconType": "bomberskirm"
  },
  {
   "name": "bomberassault",
   "title": "Odin",
   "description": "Assault Bomber (Anti-Static)",
-  "group": "Airplane Plant"
+  "group": "Airplane Plant",
+  "buildPic": "bomberassault.png",
+  "iconType": "bomberassaultshield"
  },
  {
   "name": "planescout",
   "title": "Owl",
   "description": "Radar/Sonar Scout Plane",
-  "group": "Airplane Plant"
+  "group": "Airplane Plant",
+  "buildPic": "planescout.png",
+  "iconType": "radarplane"
  },
  {
   "name": "bomberriot",
   "title": "Phoenix",
   "description": "Saturation Napalm Bomber",
-  "group": "Airplane Plant"
+  "group": "Airplane Plant",
+  "buildPic": "bomberriot.png",
+  "iconType": "bomberraider"
  },
  {
   "name": "planeheavyfighter",
   "title": "Raptor",
   "description": "Air Superiority Fighter",
-  "group": "Airplane Plant"
+  "group": "Airplane Plant",
+  "buildPic": "planeheavyfighter.png",
+  "iconType": "stealthfighter"
  },
  {
   "name": "bomberprec",
   "title": "Raven",
   "description": "Precision Bomber (Anti-Sub)",
-  "group": "Airplane Plant"
+  "group": "Airplane Plant",
+  "buildPic": "bomberprec.png",
+  "iconType": "bomberassault"
  },
  {
   "name": "planelightscout",
   "title": "Sparrow",
   "description": "Light Scout/Radar Jammer Plane",
-  "group": "Airplane Plant"
+  "group": "Airplane Plant",
+  "buildPic": "planelightscout.png",
+  "iconType": "scoutplane"
  },
  {
   "name": "planefighter",
   "title": "Swift",
   "description": "Multi-role Fighter",
-  "group": "Airplane Plant"
+  "group": "Airplane Plant",
+  "buildPic": "planefighter.png",
+  "iconType": "fighter"
  },
  {
   "name": "bomberdisarm",
   "title": "Thunderbird",
   "description": "Disarming Lightning Bomber",
-  "group": "Airplane Plant"
+  "group": "Airplane Plant",
+  "buildPic": "bomberdisarm.png",
+  "iconType": "bomberriot"
  },
  {
   "name": "amphaa",
   "title": "Angler",
   "description": "Amphibious Anti-Air Bot",
-  "group": "Amphbot Factory"
+  "group": "Amphbot Factory",
+  "buildPic": "amphaa.png",
+  "iconType": "amphaa"
  },
  {
   "name": "amphimpulse",
   "title": "Archer",
   "description": "Amphibious Raider/Riot Bot",
-  "group": "Amphbot Factory"
+  "group": "Amphbot Factory",
+  "buildPic": "amphimpulse.png",
+  "iconType": "amphraider"
  },
  {
   "name": "amphsupport",
   "title": "Bulkhead",
   "description": "Deployable Amphibious Fire Support (must stop to fire)",
-  "group": "Amphbot Factory"
+  "group": "Amphbot Factory",
+  "buildPic": "amphsupport.png",
+  "iconType": "amphsupport"
  },
  {
   "name": "amphfloater",
   "title": "Buoy",
   "description": "Heavy Amphibious Skirmisher Bot",
-  "group": "Amphbot Factory"
+  "group": "Amphbot Factory",
+  "buildPic": "amphfloater.png",
+  "iconType": "amphskirm"
  },
  {
   "name": "amphcon",
   "title": "Conch",
   "description": "Amphibious Construction Bot, Armored When Idle",
-  "group": "Amphbot Factory"
+  "group": "Amphbot Factory",
+  "buildPic": "amphcon.png",
+  "iconType": "builder"
  },
  {
   "name": "amphtele",
   "title": "Djinn",
   "description": "Amphibious Teleport Bridge",
-  "group": "Amphbot Factory"
+  "group": "Amphbot Factory",
+  "buildPic": "amphtele.png",
+  "iconType": "amphtransport"
  },
  {
   "name": "amphraid",
   "title": "Duck",
   "description": "Amphibious Raider (Anti-Sub, Undersea Fire)",
-  "group": "Amphbot Factory"
+  "group": "Amphbot Factory",
+  "buildPic": "amphraid.png",
+  "iconType": "amphtorpraider"
  },
  {
   "name": "amphassault",
   "title": "Grizzly",
   "description": "Heavy Amphibious Assault Walker",
-  "group": "Amphbot Factory"
+  "group": "Amphbot Factory",
+  "buildPic": "amphassault.png",
+  "iconType": "amphassault"
  },
  {
   "name": "amphbomb",
   "title": "Limpet",
   "description": "Amphibious Slow Bomb",
-  "group": "Amphbot Factory"
+  "group": "Amphbot Factory",
+  "buildPic": "AMPHBOMB.png",
+  "iconType": "amphbomb"
  },
  {
   "name": "amphlaunch",
   "title": "Lobster",
   "description": "Amphibious Launcher Bot",
-  "group": "Amphbot Factory"
+  "group": "Amphbot Factory",
+  "buildPic": "amphlaunch.png",
+  "iconType": "ampharty"
  },
  {
   "name": "amphriot",
   "title": "Scallop",
   "description": "Amphibious Riot Bot (Undersea Fire)",
-  "group": "Amphbot Factory"
+  "group": "Amphbot Factory",
+  "buildPic": "amphriot.png",
+  "iconType": "amphtorpriot"
  },
  {
   "name": "staticheavyradar",
   "title": "Advanced Radar",
   "description": "Long-Range Radar",
-  "group": "Athena"
+  "group": "Athena",
+  "buildPic": "staticheavyradar.png",
+  "iconType": "advradar"
  },
  {
   "name": "staticcon",
   "title": "Caretaker",
   "description": "Construction Assistant",
-  "group": "Athena"
+  "group": "Athena",
+  "buildPic": "staticcon.png",
+  "iconType": "staticbuilder"
  },
  {
   "name": "commander_egg",
   "title": "Commander Egg",
   "description": "Morphs into a Commander. Disarm and slow explosion on death.",
-  "group": "Athena"
+  "group": "Athena",
+  "buildPic": "commander_egg.png",
+  "iconType": "commander_egg"
  },
  {
   "name": "staticjammer",
   "title": "Cornea",
   "description": "Area Cloaker/Jammer",
-  "group": "Athena"
+  "group": "Athena",
+  "buildPic": "staticjammer.png",
+  "iconType": "staticjammer"
  },
  {
   "name": "staticradar",
   "title": "Radar Tower",
   "description": "Early Warning System",
-  "group": "Athena"
+  "group": "Athena",
+  "buildPic": "staticradar.png",
+  "iconType": "radar"
  },
  {
   "name": "striderantiheavy",
   "title": "Ultimatum",
   "description": "Cloaked Anti-Strider Walker (Undersea Fire)",
-  "group": "Athena"
+  "group": "Athena",
+  "buildPic": "striderantiheavy.png",
+  "iconType": "corcommander"
  },
  {
   "name": "chickenc",
   "title": "Basilisk",
   "description": "All-Terrain Riot",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chickenc.png",
+  "iconType": "chickenc"
  },
  {
   "name": "chicken_blimpy",
   "title": "Blimpy",
   "description": "Dodo Bomber",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chicken_blimpy.png",
+  "iconType": "bomberassault"
  },
  {
   "name": "chickenblobber",
   "title": "Blobber",
   "description": "Heavy Artillery",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chickenblobber.png",
+  "iconType": "walkerlrarty"
  },
  {
   "name": "chicken_shield",
   "title": "Blooper",
   "description": "Shield/Anti-Air",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chicken_shield.png",
+  "iconType": "walkershield"
  },
  {
   "name": "chicken",
   "title": "Chicken",
   "description": "Swarmer",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chicken.png",
+  "iconType": "chicken"
  },
  {
   "name": "chickena",
   "title": "Cockatrice",
   "description": "Assault/Anti-Armor",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chickena.png",
+  "iconType": "chickena"
  },
  {
   "name": "chicken_digger",
   "title": "Digger",
   "description": "Burrowing Scout/Raider",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chicken_digger.png",
+  "iconType": "chicken"
  },
  {
   "name": "chicken_dodo",
   "title": "Dodo",
   "description": "Chicken Bomb",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chicken_dodo.png",
+  "iconType": "chickendodo"
  },
  {
   "name": "chicken_drone",
   "title": "Drone",
   "description": "Morphs Into Chicken Structures",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chicken_drone.png",
+  "iconType": "builder"
  },
  {
   "name": "chicken_leaper",
   "title": "Leaper",
   "description": "Hopping Raider",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chicken_leaper.png",
+  "iconType": "chickenleaper"
  },
  {
   "name": "chicken_listener",
   "title": "Listener",
   "description": "Burrowing Mobile Seismic Detector",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chicken_listener.png",
+  "iconType": "chicken"
  },
  {
   "name": "chickenr",
   "title": "Lobber",
   "description": "Artillery",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chickenr.png",
+  "iconType": "chickenr"
  },
  {
   "name": "chicken_pigeon",
   "title": "Pigeon",
   "description": "Flying Spore Scout",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chicken_pigeon.png",
+  "iconType": "scoutplane"
  },
  {
   "name": "chicken_spidermonkey",
   "title": "Spidermonkey",
   "description": "All-Terrain Support",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chicken_spidermonkey.png",
+  "iconType": "spiderskirm"
  },
  {
   "name": "chickens",
   "title": "Spiker",
   "description": "Skirmisher",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chickens.png",
+  "iconType": "chickens"
  },
  {
   "name": "chicken_sporeshooter",
   "title": "Sporeshooter",
   "description": "All-Terrain Spores (Anti-Air/Skirm)",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chicken_sporeshooter.png",
+  "iconType": "spiderskirm"
  },
  {
   "name": "chickenf",
   "title": "Talon",
   "description": "Flying Spike Spitter",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chickenf.png",
+  "iconType": "chickenf"
  },
  {
   "name": "chicken_tiamat",
   "title": "Tiamat",
   "description": "Heavy Assault/Riot",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chicken_tiamat.png",
+  "iconType": "t3generic"
  },
  {
   "name": "chicken_dragon",
   "title": "White Dragon",
   "description": "Prime Assault Chicken",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chicken_dragon.png",
+  "iconType": "chickenminiq"
  },
  {
   "name": "chickenwurm",
   "title": "Wurm",
   "description": "Burrowing Flamer (Assault/Riot)",
-  "group": "Chicken Brood Queen"
+  "group": "Chicken Brood Queen",
+  "buildPic": "chickenwurm.png",
+  "iconType": "spidergeneric"
  },
  {
   "name": "chickenbroodqueen",
   "title": "Chicken Brood Queen",
   "description": "Tends the Nest",
-  "group": "Chickens"
+  "group": "Chickens",
+  "buildPic": "chickenbroodqueen.png",
+  "iconType": "chickenc"
  },
  {
   "name": "chickenflyerqueen",
   "title": "Chicken Queen",
   "description": "Clucking Hell!",
-  "group": "Chickens"
+  "group": "Chickens",
+  "buildPic": "chickenflyerqueen.png",
+  "iconType": "chickenq"
  },
  {
   "name": "chickenlandqueen",
   "title": "Chicken Queen",
   "description": "Clucking Hell!",
-  "group": "Chickens"
+  "group": "Chickens",
+  "buildPic": "chickenflyerqueen.png",
+  "iconType": "chickenq"
  },
  {
   "name": "chickenspire",
   "title": "Chicken Spire",
   "description": "Static Artillery",
-  "group": "Chickens"
+  "group": "Chickens",
+  "buildPic": "chickenspire.png",
+  "iconType": "staticarty"
  },
  {
   "name": "chickend",
   "title": "Chicken Tube",
   "description": "Defence and energy source",
-  "group": "Chickens"
+  "group": "Chickens",
+  "buildPic": "chickend.png",
+  "iconType": "defense"
  },
  {
   "name": "chicken_drone_starter",
   "title": "Drone",
   "description": "Morphs Into Chicken Structures",
-  "group": "Chickens"
+  "group": "Chickens",
+  "buildPic": "chicken_drone_starter.png",
+  "iconType": "builder"
  },
  {
   "name": "chicken_rafflesia",
   "title": "Rafflesia",
   "description": "Chicken Shield (Static)",
-  "group": "Chickens"
+  "group": "Chickens",
+  "buildPic": "chicken_rafflesia.png",
+  "iconType": "defenseshield"
  },
  {
   "name": "chicken_roc",
   "title": "Roc",
   "description": "Heavy Attack Flyer",
-  "group": "Chickens"
+  "group": "Chickens",
+  "buildPic": "chicken_roc.png",
+  "iconType": "heavygunship"
  },
  {
   "name": "cloakcon",
   "title": "Conjurer",
   "description": "Cloaked Construction Bot",
-  "group": "Cloakbot Factory"
+  "group": "Cloakbot Factory",
+  "buildPic": "cloakcon.png",
+  "iconType": "builder"
  },
  {
   "name": "cloakraid",
   "title": "Glaive",
   "description": "Light Raider Bot",
-  "group": "Cloakbot Factory"
+  "group": "Cloakbot Factory",
+  "buildPic": "cloakraid.png",
+  "iconType": "kbotraider"
  },
  {
   "name": "cloakaa",
   "title": "Gremlin",
   "description": "Cloaked Anti-Air Bot",
-  "group": "Cloakbot Factory"
+  "group": "Cloakbot Factory",
+  "buildPic": "cloakaa.png",
+  "iconType": "kbotaa"
  },
  {
   "name": "cloakbomb",
   "title": "Imp",
   "description": "All Terrain EMP Bomb (Burrows)",
-  "group": "Cloakbot Factory"
+  "group": "Cloakbot Factory",
+  "buildPic": "cloakbomb.png",
+  "iconType": "spiderbomb"
  },
  {
   "name": "cloakjammer",
   "title": "Iris",
   "description": "Area Cloaker/Jammer Walker",
-  "group": "Cloakbot Factory"
+  "group": "Cloakbot Factory",
+  "buildPic": "cloakjammer.png",
+  "iconType": "kbotjammer"
  },
  {
   "name": "cloakassault",
   "title": "Knight",
   "description": "Lightning Assault Bot",
-  "group": "Cloakbot Factory"
+  "group": "Cloakbot Factory",
+  "buildPic": "cloakassault.png",
+  "iconType": "kbotassault"
  },
  {
   "name": "cloaksnipe",
   "title": "Phantom",
   "description": "Cloaked Skirmish/Anti-Heavy Artillery Bot",
-  "group": "Cloakbot Factory"
+  "group": "Cloakbot Factory",
+  "buildPic": "cloaksnipe.png",
+  "iconType": "sniper"
  },
  {
   "name": "cloakriot",
   "title": "Reaver",
   "description": "Riot Bot",
-  "group": "Cloakbot Factory"
+  "group": "Cloakbot Factory",
+  "buildPic": "cloakriot.png",
+  "iconType": "kbotriot"
  },
  {
   "name": "cloakskirm",
   "title": "Ronin",
   "description": "Skirmisher Bot (Direct-Fire)",
-  "group": "Cloakbot Factory"
+  "group": "Cloakbot Factory",
+  "buildPic": "cloakskirm.png",
+  "iconType": "kbotskirm"
  },
  {
   "name": "cloakheavyraid",
   "title": "Scythe",
   "description": "Cloaked Raider Bot",
-  "group": "Cloakbot Factory"
+  "group": "Cloakbot Factory",
+  "buildPic": "cloakheavyraid.png",
+  "iconType": "stealth"
  },
  {
   "name": "cloakarty",
   "title": "Sling",
   "description": "Light Artillery Bot",
-  "group": "Cloakbot Factory"
+  "group": "Cloakbot Factory",
+  "buildPic": "cloakarty.png",
+  "iconType": "kbotarty"
  },
  {
   "name": "corcom1",
   "title": "Battle Commander",
   "description": "Heavy Combat Commander",
-  "group": "Commanders"
+  "group": "Commanders",
+  "buildPic": "corcom.png",
+  "iconType": "commander1"
  },
  {
   "name": "cremcom1",
   "title": "Commander",
   "description": "Mobile Assault Commander",
-  "group": "Commanders"
+  "group": "Commanders",
+  "buildPic": "cremcom.png",
+  "iconType": "commander1"
  },
  {
   "name": "dynsupport1",
   "title": "Engineer Commander",
   "description": "Econ/Support Commander",
-  "group": "Commanders"
+  "group": "Commanders",
+  "buildPic": "commsupport.png",
+  "iconType": "commander1"
  },
  {
   "name": "dynassault1",
   "title": "Guardian Commander",
   "description": "Heavy Combat Commander",
-  "group": "Commanders"
+  "group": "Commanders",
+  "buildPic": "benzcom.png",
+  "iconType": "commander1"
  },
  {
   "name": "neebcomm",
   "title": "Neeb Comm",
   "description": "Ugly Turkey",
-  "group": "Commanders"
+  "group": "Commanders",
+  "buildPic": "chickenbroodqueen.png",
+  "iconType": "chickenc"
  },
  {
   "name": "commrecon1",
   "title": "Recon Commander",
   "description": "High Mobility Commander",
-  "group": "Commanders"
+  "group": "Commanders",
+  "buildPic": "commrecon.png",
+  "iconType": "commander1"
  },
  {
   "name": "dynrecon1",
   "title": "Recon Commander",
   "description": "High Mobility Commander",
-  "group": "Commanders"
+  "group": "Commanders",
+  "buildPic": "commrecon.png",
+  "iconType": "commander1"
  },
  {
   "name": "benzcom1",
   "title": "Siege Commander",
   "description": "Standoff Combat Commander",
-  "group": "Commanders"
+  "group": "Commanders",
+  "buildPic": "benzcom.png",
+  "iconType": "commander1"
  },
  {
   "name": "armcom1",
   "title": "Strike Commander",
   "description": "Mobile Assault Commander",
-  "group": "Commanders"
+  "group": "Commanders",
+  "buildPic": "armcom.png",
+  "iconType": "commander1"
  },
  {
   "name": "commstrike1",
   "title": "Strike Commander",
   "description": "Mobile Assault Commander",
-  "group": "Commanders"
+  "group": "Commanders",
+  "buildPic": "commstrike.png",
+  "iconType": "commander1"
  },
  {
   "name": "dynstrike1",
   "title": "Strike Commander",
   "description": "Mobile Assault Commander",
-  "group": "Commanders"
+  "group": "Commanders",
+  "buildPic": "commstrike.png",
+  "iconType": "commander1"
  },
  {
   "name": "commsupport1",
   "title": "Support Commander",
   "description": "Econ/Support Commander",
-  "group": "Commanders"
+  "group": "Commanders",
+  "buildPic": "commsupport.png",
+  "iconType": "commander1"
  },
  {
   "name": "dynknight1",
   "title": "dynknight1",
   "description": "",
-  "group": "Commanders"
+  "group": "Commanders",
+  "buildPic": "cremcom.png"
  },
  {
   "name": "turretaaheavy",
   "title": "Artemis",
   "description": "Very Long-Range Anti-Air Missile Tower, Drains 4 m/s, 20 second stockpile",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turretaaheavy.png",
+  "iconType": "heavysam"
  },
  {
   "name": "turretaafar",
   "title": "Chainsaw",
   "description": "Long-Range Anti-Air Missile Battery",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turretaafar.png",
+  "iconType": "staticskirmaa"
  },
  {
   "name": "turretheavy",
   "title": "Desolator",
   "description": "Medium Range Defence Fortress - Power by connecting to a 50 energy grid",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turretheavy.png",
+  "iconType": "staticassaultriot"
  },
  {
   "name": "turretemp",
   "title": "Faraday",
   "description": "EMP Turret",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turretemp.png",
+  "iconType": "defensespecial"
  },
  {
   "name": "turretgauss",
   "title": "Gauss",
   "description": "Popup gauss turret, regenerates when closed (Anti-Sub)",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turretgauss.png",
+  "iconType": "defense"
  },
  {
   "name": "turretaaclose",
   "title": "Hacksaw",
   "description": "Burst Anti-Air Turret",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turretaaclose.png",
+  "iconType": "defenseskirmaa"
  },
  {
   "name": "turretlaser",
   "title": "Lotus",
   "description": "Light Laser Tower",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turretlaser.png",
+  "iconType": "defenseraider"
  },
  {
   "name": "turretantiheavy",
   "title": "Lucifer",
   "description": "Tachyon Projector - Power by connecting to a 50 energy grid",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turretantiheavy.png",
+  "iconType": "fixedtachyon"
  },
  {
   "name": "turretimpulse",
   "title": "Newton",
   "description": "Gravity Turret",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turretimpulse.png",
+  "iconType": "defensesupport"
  },
  {
   "name": "turretmissile",
   "title": "Picket",
   "description": "Light Missile Tower",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turretmissile.png",
+  "iconType": "defenseskirm"
  },
  {
   "name": "turretaalaser",
   "title": "Razor",
   "description": "Hardened Anti-Air Laser",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turretaalaser.png",
+  "iconType": "defenseaa"
  },
  {
   "name": "turretriot",
   "title": "Stardust",
   "description": "Anti-Swarm Turret",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turretriot.png",
+  "iconType": "defenseriot"
  },
  {
   "name": "turretheavylaser",
   "title": "Stinger",
   "description": "High-Energy Laser Tower",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turretheavylaser.png",
+  "iconType": "defenseheavy"
  },
  {
   "name": "turretsunlance",
   "title": "Sunlance",
   "description": "Anti-Tank Turret - Requires 25 Power",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turretsunlance.png",
+  "iconType": "staticassault"
  },
  {
   "name": "turretaaflak",
   "title": "Thresher",
   "description": "Anti-Air Flak Gun",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turretaaflak.png",
+  "iconType": "staticaa"
  },
  {
   "name": "turrettorp",
   "title": "Urchin",
   "description": "Torpedo Launcher (Anti-Sub)",
-  "group": "Defences"
+  "group": "Defences",
+  "buildPic": "turrettorp.png",
+  "iconType": "defensetorp"
  },
  {
   "name": "energyheavygeo",
   "title": "Advanced Geothermal",
   "description": "Large Powerplant - HAZARDOUS",
-  "group": "Economy"
+  "group": "Economy",
+  "buildPic": "energyheavygeo.png",
+  "iconType": "energyheavygeo"
  },
  {
   "name": "energypylon",
   "title": "Energy Pylon",
   "description": "Extends overdrive grid",
-  "group": "Economy"
+  "group": "Economy",
+  "buildPic": "energypylon.png",
+  "iconType": "pylon"
  },
  {
   "name": "energyfusion",
   "title": "Fusion Reactor",
   "description": "Medium Powerplant",
-  "group": "Economy"
+  "group": "Economy",
+  "buildPic": "energyfusion.png",
+  "iconType": "energyfusion"
  },
  {
   "name": "energygeo",
   "title": "Geothermal Generator",
   "description": "Medium Powerplant",
-  "group": "Economy"
+  "group": "Economy",
+  "buildPic": "energygeo.png",
+  "iconType": "energygeo"
  },
  {
   "name": "energysingu",
   "title": "Singularity Reactor",
   "description": "Large Powerplant - HAZARDOUS",
-  "group": "Economy"
+  "group": "Economy",
+  "buildPic": "energysingu.png",
+  "iconType": "energysingu"
  },
  {
   "name": "energysolar",
   "title": "Solar Collector",
   "description": "Small Powerplant",
-  "group": "Economy"
+  "group": "Economy",
+  "buildPic": "energysolar.png",
+  "iconType": "energy_med"
  },
  {
   "name": "energywind",
   "title": "Wind/Tidal Generator",
   "description": "Small Powerplant",
-  "group": "Economy"
+  "group": "Economy",
+  "buildPic": "energywind.png",
+  "iconType": "energywind"
  },
  {
   "name": "factoryplane",
   "title": "Airplane Plant",
   "description": "Produces Airplanes",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "factoryplane.png",
+  "iconType": "facair"
  },
  {
   "name": "plateplane",
   "title": "Airplane Plate",
   "description": "Parallel Unit Production",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "plateplane.png",
+  "iconType": "padair"
  },
  {
   "name": "factoryamph",
   "title": "Amphbot Factory",
   "description": "Produces Amphibious Bots",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "factoryamph.png",
+  "iconType": "facamph"
  },
  {
   "name": "plateamph",
   "title": "Amphbot Plate",
   "description": "Parallel Unit Production",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "plateamph.png",
+  "iconType": "padamph"
  },
  {
   "name": "factorycloak",
   "title": "Cloakbot Factory",
   "description": "Produces Cloaked, Mobile Robots",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "factorycloak.png",
+  "iconType": "fackbot"
  },
  {
   "name": "platecloak",
   "title": "Cloakbot Plate",
   "description": "Parallel Unit Production",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "platecloak.png",
+  "iconType": "padbot"
  },
  {
   "name": "factorygunship",
   "title": "Gunship Plant",
   "description": "Produces Gunships",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "factorygunship.png",
+  "iconType": "facgunship"
  },
  {
   "name": "plategunship",
   "title": "Gunship Plate",
   "description": "Parallel Unit Production",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "plategunship.png",
+  "iconType": "padgunship"
  },
  {
   "name": "platehover",
   "title": "Hovercraft Plate",
   "description": "Parallel Unit Production",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "platehover.png",
+  "iconType": "padhover"
  },
  {
   "name": "factoryhover",
   "title": "Hovercraft Platform",
   "description": "Produces Hovercraft",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "factoryhover.png",
+  "iconType": "fachover"
  },
  {
   "name": "factoryjump",
   "title": "Jumpbot Factory",
   "description": "Produces Jumpjet Equipped Robots",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "factoryjump.png",
+  "iconType": "facjumpjet"
  },
  {
   "name": "platejump",
   "title": "Jumpbot Plate",
   "description": "Parallel Unit Production",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "platejump.png",
+  "iconType": "padjumpjet"
  },
  {
   "name": "factoryveh",
   "title": "Rover Assembly",
   "description": "Produces Rovers",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "factoryveh.png",
+  "iconType": "facvehicle"
  },
  {
   "name": "plateveh",
   "title": "Rover Plate",
   "description": "Parallel Unit Production",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "plateveh.png",
+  "iconType": "padveh"
  },
  {
   "name": "factoryshield",
   "title": "Shieldbot Factory",
   "description": "Produces Tough, Shielded Robots",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "factoryshield.png",
+  "iconType": "facwalker"
  },
  {
   "name": "plateshield",
   "title": "Shieldbot Plate",
   "description": "Parallel Unit Production",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "plateshield.png",
+  "iconType": "padwalker"
  },
  {
   "name": "plateship",
   "title": "Ship Plate",
   "description": "Parallel Unit Production",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "plateship.png",
+  "iconType": "padship"
  },
  {
   "name": "factoryship",
   "title": "Shipyard",
   "description": "Produces Naval Units",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "FACTORYSHIP.png",
+  "iconType": "facship"
  },
  {
   "name": "factoryspider",
   "title": "Spider Factory",
   "description": "Produces Spiders",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "factoryspider.png",
+  "iconType": "facspider"
  },
  {
   "name": "platespider",
   "title": "Spider Plate",
   "description": "Parallel Unit Production",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "platespider.png",
+  "iconType": "padspider"
  },
  {
   "name": "factorytank",
   "title": "Tank Foundry",
   "description": "Produces Heavy Tracked Vehicles",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "factorytank.png",
+  "iconType": "factank"
  },
  {
   "name": "platetank",
   "title": "Tank Plate",
   "description": "Parallel Unit Production",
-  "group": "Factories"
+  "group": "Factories",
+  "buildPic": "platetank.png",
+  "iconType": "padtank"
  },
  {
   "name": "gunshipbomb",
   "title": "Blastwing",
   "description": "Flying Bomb/Scout (Burrows)",
-  "group": "Gunship Plant"
+  "group": "Gunship Plant",
+  "buildPic": "gunshipbomb.png",
+  "iconType": "gunshipspecial"
  },
  {
   "name": "gunshiptrans",
   "title": "Charon",
   "description": "Air Transport",
-  "group": "Gunship Plant"
+  "group": "Gunship Plant",
+  "buildPic": "gunshiptrans.png",
+  "iconType": "gunshiptransport"
  },
  {
   "name": "gunshipemp",
   "title": "Gnat",
   "description": "Anti-Heavy EMP Drone",
-  "group": "Gunship Plant"
+  "group": "Gunship Plant",
+  "buildPic": "gunshipemp.png",
+  "iconType": "gunshipscout"
  },
  {
   "name": "gunshipskirm",
   "title": "Harpy",
   "description": "Multi-Role Support Gunship",
-  "group": "Gunship Plant"
+  "group": "Gunship Plant",
+  "buildPic": "gunshipskirm.png",
+  "iconType": "gunshipskirm"
  },
  {
   "name": "gunshipheavytrans",
   "title": "Hercules",
   "description": "Armed Heavy Air Transport",
-  "group": "Gunship Plant"
+  "group": "Gunship Plant",
+  "buildPic": "gunshipheavytrans.png",
+  "iconType": "heavygunshiptransport"
  },
  {
   "name": "gunshipkrow",
   "title": "Krow",
   "description": "Flying Fortress",
-  "group": "Gunship Plant"
+  "group": "Gunship Plant",
+  "buildPic": "gunshipkrow.png",
+  "iconType": "supergunship"
  },
  {
   "name": "gunshipraid",
   "title": "Locust",
   "description": "Raider Gunship",
-  "group": "Gunship Plant"
+  "group": "Gunship Plant",
+  "buildPic": "gunshipraid.png",
+  "iconType": "gunshipraider"
  },
  {
   "name": "gunshipheavyskirm",
   "title": "Nimbus",
   "description": "Fire Support Gunship",
-  "group": "Gunship Plant"
+  "group": "Gunship Plant",
+  "buildPic": "gunshipheavyskirm.png",
+  "iconType": "heavygunshipskirm"
  },
  {
   "name": "gunshipassault",
   "title": "Revenant",
   "description": "Heavy Raider/Assault Gunship",
-  "group": "Gunship Plant"
+  "group": "Gunship Plant",
+  "buildPic": "gunshipassault.png",
+  "iconType": "heavygunshipassault"
  },
  {
   "name": "gunshipaa",
   "title": "Trident",
   "description": "Anti-Air Gunship",
-  "group": "Gunship Plant"
+  "group": "Gunship Plant",
+  "buildPic": "gunshipaa.png",
+  "iconType": "gunshipaa"
  },
  {
   "name": "gunshipcon",
   "title": "Wasp",
   "description": "Heavy Gunship Constructor",
-  "group": "Gunship Plant"
+  "group": "Gunship Plant",
+  "buildPic": "GUNSHIPCON.png",
+  "iconType": "builderair"
  },
  {
   "name": "hoverheavyraid",
   "title": "Bolas",
   "description": "Disruptor Hovercraft",
-  "group": "Hovercraft Platform"
+  "group": "Hovercraft Platform",
+  "buildPic": "hoverheavyraid.png",
+  "iconType": "hoverraider"
  },
  {
   "name": "hoverdepthcharge",
   "title": "Claymore",
   "description": "Riot Hovercraft (Anti-Sub)",
-  "group": "Hovercraft Platform"
+  "group": "Hovercraft Platform",
+  "buildPic": "hoverdepthcharge.png",
+  "iconType": "hoverspecial"
  },
  {
   "name": "hoverraid",
   "title": "Dagger",
   "description": "Fast Attack Hovercraft (Anti-Sub)",
-  "group": "Hovercraft Platform"
+  "group": "Hovercraft Platform",
+  "buildPic": "hoverraid.png",
+  "iconType": "hoverscout"
  },
  {
   "name": "hoveraa",
   "title": "Flail",
   "description": "Anti-Air Hovercraft",
-  "group": "Hovercraft Platform"
+  "group": "Hovercraft Platform",
+  "buildPic": "hoveraa.png",
+  "iconType": "hoveraa"
  },
  {
   "name": "hoverassault",
   "title": "Halberd",
   "description": "Blockade Runner Hover",
-  "group": "Hovercraft Platform"
+  "group": "Hovercraft Platform",
+  "buildPic": "hoverassault.png",
+  "iconType": "hoverassault"
  },
  {
   "name": "hoverarty",
   "title": "Lance",
   "description": "Anti-Heavy Artillery Hovercraft",
-  "group": "Hovercraft Platform"
+  "group": "Hovercraft Platform",
+  "buildPic": "hoverarty.png",
+  "iconType": "mobiletachyon"
  },
  {
   "name": "hoverriot",
   "title": "Mace",
   "description": "Riot Hover",
-  "group": "Hovercraft Platform"
+  "group": "Hovercraft Platform",
+  "buildPic": "hoverriot.png",
+  "iconType": "hoverriot"
  },
  {
   "name": "hovercon",
   "title": "Quill",
   "description": "Construction Hovercraft",
-  "group": "Hovercraft Platform"
+  "group": "Hovercraft Platform",
+  "buildPic": "hovercon.png",
+  "iconType": "builder"
  },
  {
   "name": "hoverskirm",
   "title": "Scalpel",
   "description": "Skirmisher/Anti-Heavy Hovercraft",
-  "group": "Hovercraft Platform"
+  "group": "Hovercraft Platform",
+  "buildPic": "hoverskirm.png",
+  "iconType": "hoverskirm"
  },
  {
   "name": "jumpcon",
   "title": "Constable",
   "description": "Jumpjet Constructor",
-  "group": "Jumpbot Factory"
+  "group": "Jumpbot Factory",
+  "buildPic": "jumpcon.png",
+  "iconType": "builder"
  },
  {
   "name": "jumparty",
   "title": "Firewalker",
   "description": "Saturation Artillery Walker",
-  "group": "Jumpbot Factory"
+  "group": "Jumpbot Factory",
+  "buildPic": "jumparty.png",
+  "iconType": "fatbotarty"
  },
  {
   "name": "jumpassault",
   "title": "Jack",
   "description": "Melee Assault Jumper",
-  "group": "Jumpbot Factory"
+  "group": "Jumpbot Factory",
+  "buildPic": "jumpassault.png",
+  "iconType": "jumpjetassault"
  },
  {
   "name": "jumpsumo",
   "title": "Jugglenaut",
   "description": "Heavy Riot Jumper",
-  "group": "Jumpbot Factory"
+  "group": "Jumpbot Factory",
+  "buildPic": "jumpsumo.png",
+  "iconType": "t3jumpjetriot"
  },
  {
   "name": "jumpskirm",
   "title": "Moderator",
   "description": "Disruptor Skirmisher Walker",
-  "group": "Jumpbot Factory"
+  "group": "Jumpbot Factory",
+  "buildPic": "jumpskirm.png",
+  "iconType": "fatbotsupport"
  },
  {
   "name": "jumpblackhole",
   "title": "Placeholder",
   "description": "Black Hole Launcher",
-  "group": "Jumpbot Factory"
+  "group": "Jumpbot Factory",
+  "buildPic": "jumpblackhole.png",
+  "iconType": "kbotwideriot"
  },
  {
   "name": "jumpscout",
   "title": "Puppy",
   "description": "Walking Missile",
-  "group": "Jumpbot Factory"
+  "group": "Jumpbot Factory",
+  "buildPic": "jumpscout.png",
+  "iconType": "kbotbomb"
  },
  {
   "name": "jumpraid",
   "title": "Pyro",
   "description": "Raider/Riot Jumper",
-  "group": "Jumpbot Factory"
+  "group": "Jumpbot Factory",
+  "buildPic": "jumpraid.png",
+  "iconType": "jumpjetraider"
  },
  {
   "name": "jumpbomb",
   "title": "Skuttle",
   "description": "Cloaked Jumping Anti-Heavy Bomb",
-  "group": "Jumpbot Factory"
+  "group": "Jumpbot Factory",
+  "buildPic": "jumpbomb.png",
+  "iconType": "jumpjetbomb"
  },
  {
   "name": "jumpaa",
   "title": "Toad",
   "description": "Heavy Anti-Air Jumper",
-  "group": "Jumpbot Factory"
+  "group": "Jumpbot Factory",
+  "buildPic": "jumpaa.png",
+  "iconType": "jumpjetaa"
  },
  {
   "name": "tacnuke",
   "title": "Eos",
   "description": "Tactical Nuke",
-  "group": "Missile Silo"
+  "group": "Missile Silo",
+  "buildPic": "tacnuke.png",
+  "iconType": "cruisemissilesmall"
  },
  {
   "name": "napalmmissile",
   "title": "Inferno",
   "description": "Napalm Missile",
-  "group": "Missile Silo"
+  "group": "Missile Silo",
+  "buildPic": "napalmmissile.png",
+  "iconType": "cruisemissilesmall"
  },
  {
   "name": "seismic",
   "title": "Quake",
   "description": "Seismic Missile",
-  "group": "Missile Silo"
+  "group": "Missile Silo",
+  "buildPic": "seismic.png",
+  "iconType": "cruisemissilesmall"
  },
  {
   "name": "empmissile",
   "title": "Shockley",
   "description": "EMP missile",
-  "group": "Missile Silo"
+  "group": "Missile Silo",
+  "buildPic": "empmissile.png",
+  "iconType": "cruisemissilesmall"
  },
  {
   "name": "missileslow",
   "title": "Zeno",
   "description": "Slow Homing Missile - High single-target slow damage with lingering damage over time",
-  "group": "Missile Silo"
+  "group": "Missile Silo",
+  "buildPic": "missileslow.png",
+  "iconType": "cruisemissilesmall"
  },
  {
   "name": "veharty",
   "title": "Badger",
   "description": "Artillery Minelayer Rover",
-  "group": "Rover Assembly"
+  "group": "Rover Assembly",
+  "buildPic": "veharty.png",
+  "iconType": "vehiclearty"
  },
  {
   "name": "vehaa",
   "title": "Crasher",
   "description": "Fast Anti-Air Rover",
-  "group": "Rover Assembly"
+  "group": "Rover Assembly",
+  "buildPic": "vehaa.png",
+  "iconType": "vehicleaa"
  },
  {
   "name": "vehscout",
   "title": "Dart",
   "description": "Disruptor Raider/Scout Rover",
-  "group": "Rover Assembly"
+  "group": "Rover Assembly",
+  "buildPic": "vehscout.png",
+  "iconType": "vehiclescout"
  },
  {
   "name": "vehcapture",
   "title": "Dominatrix",
   "description": "Capture Rover",
-  "group": "Rover Assembly"
+  "group": "Rover Assembly",
+  "buildPic": "vehcapture.png",
+  "iconType": "vehiclespecial"
  },
  {
   "name": "vehsupport",
   "title": "Fencer",
   "description": "Deployable Missile Rover (must stop to fire)",
-  "group": "Rover Assembly"
+  "group": "Rover Assembly",
+  "buildPic": "vehsupport.png",
+  "iconType": "vehiclesupport"
  },
  {
   "name": "vehheavyarty",
   "title": "Impaler",
   "description": "Precision Artillery Rover",
-  "group": "Rover Assembly"
+  "group": "Rover Assembly",
+  "buildPic": "vehheavyarty.png",
+  "iconType": "vehiclelrarty"
  },
  {
   "name": "vehcon",
   "title": "Mason",
   "description": "Construction Rover",
-  "group": "Rover Assembly"
+  "group": "Rover Assembly",
+  "buildPic": "vehcon.png",
+  "iconType": "builder"
  },
  {
   "name": "vehassault",
   "title": "Ravager",
   "description": "Assault Rover",
-  "group": "Rover Assembly"
+  "group": "Rover Assembly",
+  "buildPic": "vehassault.png",
+  "iconType": "vehicleassault"
  },
  {
   "name": "vehriot",
   "title": "Ripper",
   "description": "Riot Rover",
-  "group": "Rover Assembly"
+  "group": "Rover Assembly",
+  "buildPic": "vehriot.png",
+  "iconType": "vehicleriot"
  },
  {
   "name": "vehraid",
   "title": "Scorcher",
   "description": "Raider Rover",
-  "group": "Rover Assembly"
+  "group": "Rover Assembly",
+  "buildPic": "vehraid.png",
+  "iconType": "vehicleraider"
  },
  {
   "name": "shieldshield",
   "title": "Aspis",
   "description": "Area Shield Walker",
-  "group": "Shieldbot Factory"
+  "group": "Shieldbot Factory",
+  "buildPic": "shieldshield.png",
+  "iconType": "walkershield"
  },
  {
   "name": "shieldraid",
   "title": "Bandit",
   "description": "Medium-Light Raider Bot",
-  "group": "Shieldbot Factory"
+  "group": "Shieldbot Factory",
+  "buildPic": "shieldraid.png",
+  "iconType": "walkerraider"
  },
  {
   "name": "shieldcon",
   "title": "Convict",
   "description": "Shielded Construction Bot",
-  "group": "Shieldbot Factory"
+  "group": "Shieldbot Factory",
+  "buildPic": "shieldcon.png",
+  "iconType": "builder"
  },
  {
   "name": "shieldscout",
   "title": "Dirtbag",
   "description": "Box of Dirt",
-  "group": "Shieldbot Factory"
+  "group": "Shieldbot Factory",
+  "buildPic": "shieldscout.png",
+  "iconType": "clogger"
  },
  {
   "name": "shieldfelon",
   "title": "Felon",
   "description": "Shielded Riot/Skirmisher Bot",
-  "group": "Shieldbot Factory"
+  "group": "Shieldbot Factory",
+  "buildPic": "shieldfelon.png",
+  "iconType": "walkersupport"
  },
  {
   "name": "shieldriot",
   "title": "Outlaw",
   "description": "Riot Bot",
-  "group": "Shieldbot Factory"
+  "group": "Shieldbot Factory",
+  "buildPic": "shieldriot.png",
+  "iconType": "walkerriot"
  },
  {
   "name": "shieldarty",
   "title": "Racketeer",
   "description": "Disarming Artillery",
-  "group": "Shieldbot Factory"
+  "group": "Shieldbot Factory",
+  "buildPic": "SHIELDARTY.png",
+  "iconType": "walkerlrarty"
  },
  {
   "name": "shieldskirm",
   "title": "Rogue",
   "description": "Skirmisher Bot (Indirect Fire)",
-  "group": "Shieldbot Factory"
+  "group": "Shieldbot Factory",
+  "buildPic": "shieldskirm.png",
+  "iconType": "walkerskirm"
  },
  {
   "name": "shieldbomb",
   "title": "Snitch",
   "description": "Crawling Bomb (Burrows)",
-  "group": "Shieldbot Factory"
+  "group": "Shieldbot Factory",
+  "buildPic": "shieldbomb.png",
+  "iconType": "walkerbomb"
  },
  {
   "name": "shieldassault",
   "title": "Thug",
   "description": "Shielded Assault Bot",
-  "group": "Shieldbot Factory"
+  "group": "Shieldbot Factory",
+  "buildPic": "shieldassault.png",
+  "iconType": "walkerassault"
  },
  {
   "name": "shieldaa",
   "title": "Vandal",
   "description": "Anti-Air Bot",
-  "group": "Shieldbot Factory"
+  "group": "Shieldbot Factory",
+  "buildPic": "shieldaa.png",
+  "iconType": "walkeraa"
  },
  {
   "name": "shipriot",
   "title": "Corsair",
   "description": "Raider/Riot Corvette",
-  "group": "Shipyard"
+  "group": "Shipyard",
+  "buildPic": "shipriot.png",
+  "iconType": "shipriot"
  },
  {
   "name": "shipscout",
   "title": "Cutter",
   "description": "Scout Ship (Disarming)",
-  "group": "Shipyard"
+  "group": "Shipyard",
+  "buildPic": "shipscout.png",
+  "iconType": "shipscout"
  },
  {
   "name": "shiparty",
   "title": "Envoy",
   "description": "Artillery Cruiser",
-  "group": "Shipyard"
+  "group": "Shipyard",
+  "buildPic": "shiparty.png",
+  "iconType": "shiparty"
  },
  {
   "name": "shiptorpraider",
   "title": "Hunter",
   "description": "Torpedo Raider Ship (Anti-Sub)",
-  "group": "Shipyard"
+  "group": "Shipyard",
+  "buildPic": "shiptorpraider.png",
+  "iconType": "shiptorpraider"
  },
  {
   "name": "shipcon",
   "title": "Mariner",
   "description": "Construction Ship",
-  "group": "Shipyard"
+  "group": "Shipyard",
+  "buildPic": "shipcon.png",
+  "iconType": "builder"
  },
  {
   "name": "shipskirm",
   "title": "Mistral",
   "description": "Skirmisher Ship",
-  "group": "Shipyard"
+  "group": "Shipyard",
+  "buildPic": "shipskirm.png",
+  "iconType": "shipskirm"
  },
  {
   "name": "subraider",
   "title": "Seawolf",
   "description": "Raider Submarine (Anti-Sub, Undersea Fire)",
-  "group": "Shipyard"
+  "group": "Shipyard",
+  "buildPic": "subraider.png",
+  "iconType": "subraider"
  },
  {
   "name": "shipassault",
   "title": "Siren",
   "description": "Riot/Assault Destroyer (Anti-Sub)",
-  "group": "Shipyard"
+  "group": "Shipyard",
+  "buildPic": "shipassault.png",
+  "iconType": "shipassault"
  },
  {
   "name": "shipaa",
   "title": "Zephyr",
   "description": "Anti-Air Frigate",
-  "group": "Shipyard"
+  "group": "Shipyard",
+  "buildPic": "shipaa.png",
+  "iconType": "shipaa"
  },
  {
   "name": "spidercrabe",
   "title": "Crab",
   "description": "Heavy Riot/Skirmish Spider - Curls into Armored Form When Stationary",
-  "group": "Spider Factory"
+  "group": "Spider Factory",
+  "buildPic": "spidercrabe.png",
+  "iconType": "spidersupport"
  },
  {
   "name": "spiderscout",
   "title": "Flea",
   "description": "Ultralight Scout Spider (Burrows)",
-  "group": "Spider Factory"
+  "group": "Spider Factory",
+  "buildPic": "spiderscout.png",
+  "iconType": "spiderscout"
  },
  {
   "name": "spiderassault",
   "title": "Hermit",
   "description": "All Terrain Assault Bot",
-  "group": "Spider Factory"
+  "group": "Spider Factory",
+  "buildPic": "spiderassault.png",
+  "iconType": "spiderassault"
  },
  {
   "name": "spiderskirm",
   "title": "Recluse",
   "description": "Skirmisher Spider (Indirect Fire)",
-  "group": "Spider Factory"
+  "group": "Spider Factory",
+  "buildPic": "spiderskirm.png",
+  "iconType": "spiderskirm"
  },
  {
   "name": "spiderriot",
   "title": "Redback",
   "description": "Riot Spider",
-  "group": "Spider Factory"
+  "group": "Spider Factory",
+  "buildPic": "spiderriot.png",
+  "iconType": "spiderriot"
  },
  {
   "name": "spideraa",
   "title": "Tarantula",
   "description": "Anti-Air Spider",
-  "group": "Spider Factory"
+  "group": "Spider Factory",
+  "buildPic": "spideraa.png",
+  "iconType": "spideraa"
  },
  {
   "name": "spideremp",
   "title": "Venom",
   "description": "Lightning Riot Spider",
-  "group": "Spider Factory"
+  "group": "Spider Factory",
+  "buildPic": "spideremp.png",
+  "iconType": "spiderriotspecial"
  },
  {
   "name": "spidercon",
   "title": "Weaver",
   "description": "Construction Spider",
-  "group": "Spider Factory"
+  "group": "Spider Factory",
+  "buildPic": "spidercon.png",
+  "iconType": "builder"
  },
  {
   "name": "spiderantiheavy",
   "title": "Widow",
   "description": "Cloaked Scout/Anti-Heavy",
-  "group": "Spider Factory"
+  "group": "Spider Factory",
+  "buildPic": "spiderantiheavy.png",
+  "iconType": "spiderspecialscout"
  },
  {
   "name": "athena",
   "title": "Athena",
   "description": "Airborne SpecOps Engineer",
-  "group": "Strider Hub"
+  "group": "Strider Hub",
+  "buildPic": "athena.png",
+  "iconType": "t3builder"
  },
  {
   "name": "striderdante",
   "title": "Dante",
   "description": "Assault/Riot Strider",
-  "group": "Strider Hub"
+  "group": "Strider Hub",
+  "buildPic": "striderdante.png",
+  "iconType": "t3riot"
  },
  {
   "name": "striderdetriment",
   "title": "Detriment",
   "description": "Ultimate Assault Strider (Undersea Fire)",
-  "group": "Strider Hub"
+  "group": "Strider Hub",
+  "buildPic": "striderdetriment.png",
+  "iconType": "krogoth"
  },
  {
   "name": "striderfunnelweb",
   "title": "Funnelweb",
   "description": "Shield Support Strider",
-  "group": "Strider Hub"
+  "group": "Strider Hub",
+  "buildPic": "striderfunnelweb.png",
+  "iconType": "t3spiderbuilder"
  },
  {
   "name": "striderarty",
   "title": "Merlin",
   "description": "Heavy Saturation Artillery Strider",
-  "group": "Strider Hub"
+  "group": "Strider Hub",
+  "buildPic": "striderarty.png",
+  "iconType": "t3arty"
  },
  {
   "name": "striderbantha",
   "title": "Paladin",
   "description": "Ranged Support Strider",
-  "group": "Strider Hub"
+  "group": "Strider Hub",
+  "buildPic": "striderbantha.png",
+  "iconType": "t3generic"
  },
  {
   "name": "shipcarrier",
   "title": "Reef",
   "description": "Aircraft Carrier (Bombardment), stockpiles disarm missiles at 5 m/s",
-  "group": "Strider Hub"
+  "group": "Strider Hub",
+  "buildPic": "shipcarrier.png",
+  "iconType": "shipcarrier"
  },
  {
   "name": "striderscorpion",
   "title": "Scorpion",
   "description": "Cloaked Infiltration Strider",
-  "group": "Strider Hub"
+  "group": "Strider Hub",
+  "buildPic": "striderscorpion.png",
+  "iconType": "t3spidergeneric"
  },
  {
   "name": "subtacmissile",
   "title": "Scylla",
   "description": "Tactical Nuke Missile Sub, Drains 20 m/s, 30 second stockpile",
-  "group": "Strider Hub"
+  "group": "Strider Hub",
+  "buildPic": "subtacmissile.png",
+  "iconType": "subtacmissile"
  },
  {
   "name": "shipheavyarty",
   "title": "Shogun",
   "description": "Battleship (Heavy Artillery)",
-  "group": "Strider Hub"
+  "group": "Strider Hub",
+  "buildPic": "shipheavyarty.png",
+  "iconType": "shipheavyarty"
  },
  {
   "name": "striderdozer",
   "title": "Dozer",
   "description": "Heavy Buster, Very Tank",
-  "group": "Striders"
+  "group": "Striders",
+  "buildPic": "tankheavyassault.png",
+  "iconType": "tankskirm"
  },
  {
   "name": "striderhub",
   "title": "Strider Hub",
   "description": "Constructs Striders",
-  "group": "Striders"
+  "group": "Striders",
+  "buildPic": "striderhub.png",
+  "iconType": "t3hub"
  },
  {
   "name": "staticshield",
   "title": "Aegis",
   "description": "Area Shield",
-  "group": "Support Structures"
+  "group": "Support Structures",
+  "buildPic": "staticshield.png",
+  "iconType": "defenseshield"
  },
  {
   "name": "staticrearm",
   "title": "Airpad",
   "description": "Repairs and Rearms Aircraft, repairs at 2.5 e/s per pad",
-  "group": "Support Structures"
+  "group": "Support Structures",
+  "buildPic": "staticrearm.png",
+  "iconType": "building"
  },
  {
   "name": "staticantinuke",
   "title": "Antinuke",
   "description": "Strategic Nuke Interception System",
-  "group": "Support Structures"
+  "group": "Support Structures",
+  "buildPic": "staticantinuke.png",
+  "iconType": "antinuke"
  },
  {
   "name": "staticheavyarty",
   "title": "Big Bertha",
   "description": "Strategic Plasma Cannon",
-  "group": "Support Structures"
+  "group": "Support Structures",
+  "buildPic": "staticheavyarty.png",
+  "iconType": "lrpc"
  },
  {
   "name": "staticarty",
   "title": "Cerberus",
   "description": "Plasma Artillery Battery - Power by connecting to a 50 energy grid",
-  "group": "Support Structures"
+  "group": "Support Structures",
+  "buildPic": "staticarty.png",
+  "iconType": "staticarty"
  },
  {
   "name": "staticmex",
   "title": "Metal Extractor",
   "description": "Produces Metal",
-  "group": "Support Structures"
+  "group": "Support Structures",
+  "buildPic": "staticmex.png",
+  "iconType": "mex"
  },
  {
   "name": "staticmissilesilo",
   "title": "Missile Silo",
   "description": "Produces Tactical Missiles",
-  "group": "Support Structures"
+  "group": "Support Structures",
+  "buildPic": "staticmissilesilo.png",
+  "iconType": "cruisemissile"
  },
  {
   "name": "statictempshield",
   "title": "Pavise",
   "description": "Temporary Shield",
-  "group": "Support Structures"
+  "group": "Support Structures",
+  "buildPic": "statictempshield.png",
+  "iconType": "tempshield"
  },
  {
   "name": "staticsonar",
   "title": "Sonar Station",
   "description": "Locates Water Units",
-  "group": "Support Structures"
+  "group": "Support Structures",
+  "buildPic": "staticsonar.png",
+  "iconType": "sonar"
  },
  {
   "name": "staticstorage",
   "title": "Storage",
   "description": "Stores Metal and Energy (500)",
-  "group": "Support Structures"
+  "group": "Support Structures",
+  "buildPic": "staticstorage.png",
+  "iconType": "storage"
  },
  {
   "name": "statictele",
   "title": "Teleporter",
   "description": "Blank",
-  "group": "Support Structures"
+  "group": "Support Structures",
+  "iconType": "mahlazer"
  },
  {
   "name": "staticnuke",
   "title": "Trinity",
   "description": "Strategic Nuclear Launcher, Drains 18 m/s, 3 minute stockpile",
-  "group": "Support Structures"
+  "group": "Support Structures",
+  "buildPic": "staticnuke.png",
+  "iconType": "nuke"
  },
  {
   "name": "tankheavyraid",
   "title": "Blitz",
   "description": "Lightning Assault/Raider Tank",
-  "group": "Tank Foundry"
+  "group": "Tank Foundry",
+  "buildPic": "tankheavyraid.png",
+  "iconType": "tankraider"
  },
  {
   "name": "tankheavyassault",
   "title": "Cyclops",
   "description": "Very Heavy Tank Buster",
-  "group": "Tank Foundry"
+  "group": "Tank Foundry",
+  "buildPic": "tankheavyassault.png",
+  "iconType": "tankskirm"
  },
  {
   "name": "tankarty",
   "title": "Emissary",
   "description": "General-Purpose Artillery",
-  "group": "Tank Foundry"
+  "group": "Tank Foundry",
+  "buildPic": "tankarty.png",
+  "iconType": "tankarty"
  },
  {
   "name": "tankaa",
   "title": "Ettin",
   "description": "Flak Anti-Air Tank",
-  "group": "Tank Foundry"
+  "group": "Tank Foundry",
+  "buildPic": "tankaa.png",
+  "iconType": "tankaa"
  },
  {
   "name": "tankraid",
   "title": "Kodachi",
   "description": "Raider Tank",
-  "group": "Tank Foundry"
+  "group": "Tank Foundry",
+  "buildPic": "tankraid.png",
+  "iconType": "tankscout"
  },
  {
   "name": "tankassault",
   "title": "Minotaur",
   "description": "Assault Tank",
-  "group": "Tank Foundry"
+  "group": "Tank Foundry",
+  "buildPic": "tankassault.png",
+  "iconType": "tankassault"
  },
  {
   "name": "tankriot",
   "title": "Ogre",
   "description": "Heavy Riot Support Tank",
-  "group": "Tank Foundry"
+  "group": "Tank Foundry",
+  "buildPic": "tankriot.png",
+  "iconType": "tankriot"
  },
  {
   "name": "tankheavyarty",
   "title": "Tremor",
   "description": "Heavy Saturation Artillery Tank",
-  "group": "Tank Foundry"
+  "group": "Tank Foundry",
+  "buildPic": "tankheavyarty.png",
+  "iconType": "tanklrarty"
  },
  {
   "name": "tankcon",
   "title": "Welder",
   "description": "Armed Construction Tank",
-  "group": "Tank Foundry"
+  "group": "Tank Foundry",
+  "buildPic": "tankcon.png",
+  "iconType": "builder"
  },
  {
   "name": "damagesink",
   "title": "Damage Sink thing",
   "description": "Does not care if you shoot at it.",
-  "group": "Test and debug"
+  "group": "Test and debug",
+  "buildPic": "zenith.png",
+  "iconType": "mahlazer"
  },
  {
   "name": "dbg_moire",
@@ -1407,37 +1871,48 @@
   "name": "empiricaldpser",
   "title": "Empirical DPS thing",
   "description": "Shoot at it for science.",
-  "group": "Test and debug"
+  "group": "Test and debug",
+  "buildPic": "zenith.png",
+  "iconType": "mahlazer"
  },
  {
   "name": "empiricaldpsersmall",
   "title": "Empirical DPS thing (small)",
   "description": "Shoot at it for science.",
-  "group": "Test and debug"
+  "group": "Test and debug",
+  "buildPic": "zenith.png",
+  "iconType": "mahlazer"
  },
  {
   "name": "fakeunit_aatarget",
   "title": "Fake AA target",
   "description": "Used by the jumpjet script.",
-  "group": "Test and debug"
+  "group": "Test and debug",
+  "buildPic": "levelterra.png"
  },
  {
   "name": "fakeunit",
   "title": "Fake radar signal",
   "description": "Created by scrambling devices.",
-  "group": "Test and debug"
+  "group": "Test and debug",
+  "buildPic": "levelterra.png",
+  "iconType": "none"
  },
  {
   "name": "fakeunit_los",
   "title": "LOS Provider",
   "description": "Knows all and sees all",
-  "group": "Test and debug"
+  "group": "Test and debug",
+  "buildPic": "levelterra.png",
+  "iconType": "none"
  },
  {
   "name": "rocksink",
   "title": "Rocking Damage Sink thing",
   "description": "Rocks when you shoot at it.",
-  "group": "Test and debug"
+  "group": "Test and debug",
+  "buildPic": "zenith.png",
+  "iconType": "mahlazer"
  },
  {
   "name": "tiptest",
@@ -1473,43 +1948,55 @@
   "name": "spideranarchid",
   "title": "Anarchid",
   "description": "Riot EMP Spider",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "spideremp.png",
+  "iconType": "spiderriot"
  },
  {
   "name": "obj_artefact",
   "title": "Ancient Artefact",
   "description": "Capture artefacts by destroying them. Control all artefacts to win.",
-  "group": "Other"
+  "group": "Other",
+  "iconType": "mahlazer_special"
  },
  {
   "name": "asteroid",
   "title": "Asteroid",
   "description": "Space Rock",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "asteroid.png"
  },
  {
   "name": "pw_hq_attacker",
   "title": "Attacker Command",
   "description": "PlanetWars Field HQ (changes influence gain)",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "pw_hq.png",
+  "iconType": "pw_assault"
  },
  {
   "name": "pw_hq_attacker_extra",
   "title": "Attacker Extra Command",
   "description": "",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "pw_hq_extra.png",
+  "iconType": "pw_assault_small"
  },
  {
   "name": "wolverine_mine",
   "title": "Claw",
   "description": "Badger Mine",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "wolverine_mine.png",
+  "iconType": "mine"
  },
  {
   "name": "hoverminer",
   "title": "Dampener",
   "description": "Minelaying Hover",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "hoverminer.png",
+  "iconType": "hoverskirm"
  },
  {
   "name": "pw_hq_defender",
@@ -1527,126 +2014,166 @@
   "name": "raveparty",
   "title": "Disco Rave Party",
   "description": "Destructive Rainbow Projector",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "raveparty.png",
+  "iconType": "mahlazer"
  },
  {
   "name": "dronelight",
   "title": "Firefly",
   "description": "Attack Drone",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "dronelight.png",
+  "iconType": "fighter"
  },
  {
   "name": "pw_generic",
   "title": "Generic Neutral Structure",
   "description": "Blank",
-  "group": "Other"
+  "group": "Other",
+  "iconType": "mahlazer"
  },
  {
   "name": "starlight_satellite",
   "title": "Glint",
   "description": "Starlight relay satellite",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "satellite.png",
+  "iconType": "satellite"
  },
  {
   "name": "grebe",
   "title": "Grebe",
   "description": "Amphibious Raider Bot",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "grebe.png",
+  "iconType": "walkerraider"
  },
  {
   "name": "dronecarry",
   "title": "Gull",
   "description": "Carrier Drone",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "dronecarry.png",
+  "iconType": "smallgunship"
  },
  {
   "name": "tele_beacon",
   "title": "Lamp",
   "description": "Teleport Bridge Entry Beacon, right click to teleport.",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "tele_beacon.png",
+  "iconType": "statictransport"
  },
  {
   "name": "subscout",
   "title": "Lancelet",
   "description": "Scout/Suicide Minisub",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "subscout.png",
+  "iconType": "submarine"
  },
  {
   "name": "bomberheavyold",
   "title": "Likho",
   "description": "Singularity Bomber",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "bomberheavy.png",
+  "iconType": "bombernuke"
  },
  {
   "name": "hoversonic",
   "title": "Morningstar",
   "description": "Antisub Hovercraft",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "hoversonic.png",
+  "iconType": "hoverassault"
  },
  {
   "name": "nebula",
   "title": "Nebula",
   "description": "Atmospheric Mothership",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "nebula.png",
+  "iconType": "nebula"
  },
  {
   "name": "hovershotgun",
   "title": "Punisher",
   "description": "Shotgun Hover",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "hovershotgun.png",
+  "iconType": "hoverassault"
  },
  {
   "name": "roost",
   "title": "Roost",
   "description": "Spawns Chicken",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "roost.png",
+  "iconType": "special"
  },
  {
   "name": "slicer",
   "title": "Slicer",
   "description": "Melee Assault Walker",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "core_slicer.png",
+  "iconType": "jumpjetassault"
  },
  {
   "name": "dronefighter",
   "title": "Spicula",
   "description": "Fighter Drone",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "dronefighter.png",
+  "iconType": "fighter"
  },
  {
   "name": "mahlazer",
   "title": "Starlight",
   "description": "Planetary Energy Chisel",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "mahlazer.png",
+  "iconType": "mahlazer"
  },
  {
   "name": "terraunit",
   "title": "Terraform",
   "description": "Spent: 0",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "levelterra.png"
  },
  {
   "name": "hoverskirm2",
   "title": "Trisula",
   "description": "Light Assault/Battle Hovercraft",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "hoverskirm2.png",
+  "iconType": "hoverskirm"
  },
  {
   "name": "assaultcruiser",
   "title": "Vanquisher",
   "description": "Heavy Cruiser (Assault)",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "assaultcruiser.png",
+  "iconType": "vanquisher"
  },
  {
   "name": "droneheavyslow",
   "title": "Viper",
   "description": "Advanced Battle Drone",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "droneheavyslow.png",
+  "iconType": "gunship"
  },
  {
   "name": "zenith",
   "title": "Zenith",
   "description": "Meteor Controller",
-  "group": "Other"
+  "group": "Other",
+  "buildPic": "zenith.png",
+  "iconType": "mahlazer"
  }
 ]

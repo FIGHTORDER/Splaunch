@@ -23,6 +23,15 @@ export function colourOf(teamId) {
   return TEAM_COLOURS[teamId % TEAM_COLOURS.length];
 }
 
+/** The same colour as `[r, g, b]`, for tinting a canvas. */
+export function rgbOf(teamId) {
+  const hex = colourOf(teamId).css;
+  return [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+}
+
+/** Gaia's grey, for a unit no team owns. */
+export const NEUTRAL_RGB = [139, 139, 139];
+
 export default function Teams({
   teams, setTeams, defeat, setDefeat, ais, roster, units, difficulty, setDifficulty,
 }) {

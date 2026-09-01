@@ -74,7 +74,13 @@ export default function Minimap({ map, saturate = 0.9, style, children }) {
           </span>
         </div>
       ) : (
-        <img src={src} alt="" onError={() => setFailed(true)} onLoad={() => setLoaded(true)}
+        /* Lazily, because the picker draws up to 48 of these at once and every
+           one is a request to zero-k.info. Coilbox's author reports that this
+           shape of traffic against the game infrastructure had real
+           consequences at BAR, including a dead endpoint; the browser only
+           fetching what is scrolled into view costs one attribute. */
+        <img src={src} alt="" loading="lazy" decoding="async"
+          onError={() => setFailed(true)} onLoad={() => setLoaded(true)}
           style={{ width: "100%", height: "100%", objectFit: "fill", display: "block",
             filter: `saturate(${saturate})`, opacity: loaded ? 1 : 0,
             transition: "opacity var(--dur-base) var(--ease-out)" }} />
