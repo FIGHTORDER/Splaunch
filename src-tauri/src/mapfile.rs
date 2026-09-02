@@ -44,6 +44,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::Serialize;
 
@@ -102,6 +103,39 @@ pub fn metal_map(smf: &[u8]) -> Option<MetalMap> {
     })
 }
 
+/// Metal maps already read, by the archive they came out of.
+///
+/// Reading one means inflating an `.sd7` far enough to reach the `.smf`, which
+/// on a large map is seconds of work; the editor asks again on every map
+/// change, and a player comparing two maps pays it every time they switch back.
+/// A map archive does not change under a running editor, so the answer keeps.
+///
+/// Small and oldest-first rather than a real cache: this holds at most a
+/// handful of maps and a metal map is a few hundred kilobytes of base64.
+static METAL_CACHE: Mutex<Vec<(PathBuf, Option<MetalMap>)>> = Mutex::new(Vec::new());
+
+/// How many maps are remembered at once.
+const CACHE_KEEP: usize = 8;
+
+/// The metal map for an archive, reading it only the first time.
+pub fn metal_for(archive: &Path) -> Option<MetalMap> {
+    if let Ok(cache) = METAL_CACHE.lock() {
+        if let Some((_, hit)) = cache.iter().find(|(p, _)| p == archive) {
+            return hit.clone();
+        }
+    }
+    let found = smf_bytes(archive).and_then(|smf| metal_map(&smf));
+    if let Ok(mut cache) = METAL_CACHE.lock() {
+        if !cache.iter().any(|(p, _)| p == archive) {
+            if cache.len() >= CACHE_KEEP {
+                cache.remove(0);
+            }
+            cache.push((archive.to_path_buf(), found.clone()));
+        }
+    }
+    found
+}
+
 /// The `.smf` inside a map archive.
 ///
 /// Both container formats, because Zero-K's maps are `.sd7` - 7-zip - and a few
@@ -141,8 +175,15 @@ fn smf_from_zip(archive: &Path) -> Option<Vec<u8>> {
     if entry.size() as usize > MAX_SMF_BYTES {
         return None;
     }
+    /* The check above reads the archive's own claim about the entry, which a
+       crafted archive is free to understate. The cap that holds is the one on
+       the bytes actually coming out; one byte past it is how a liar is told
+       from a large map. */
     let mut out = Vec::new();
-    entry.read_to_end(&mut out).ok()?;
+    Read::by_ref(&mut entry).take(MAX_SMF_BYTES as u64 + 1).read_to_end(&mut out).ok()?;
+    if out.len() > MAX_SMF_BYTES {
+        return None;
+    }
     Some(out)
 }
 
@@ -162,7 +203,12 @@ fn smf_from_7z(archive: &Path) -> Option<Vec<u8>> {
                 return Ok(true);
             }
             let mut out = Vec::new();
-            body.read_to_end(&mut out)?;
+            // Bounded by what comes out, not by what the header claims.
+            let mut capped = (&mut *body).take(MAX_SMF_BYTES as u64 + 1);
+            capped.read_to_end(&mut out)?;
+            if out.len() > MAX_SMF_BYTES {
+                return Ok(false);
+            }
             found = Some(out);
             // Stop: the tiles beside it are far larger and nothing here wants them.
             Ok(false)

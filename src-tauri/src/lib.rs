@@ -8,6 +8,7 @@ mod launch;
 mod mapfile;
 mod maps;
 mod preset;
+mod savefile;
 mod scenario;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

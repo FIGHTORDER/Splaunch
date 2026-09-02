@@ -354,8 +354,7 @@ pub fn spsc_export_campaign(
     let path = path
         .into_path()
         .map_err(|e| format!("that is not a path this can write to: {e}"))?;
-    std::fs::write(&path, &bytes)
-        .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    crate::savefile::write(&path, &bytes)?;
     Ok(Some(path.display().to_string()))
 }
 

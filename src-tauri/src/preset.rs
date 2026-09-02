@@ -226,7 +226,23 @@ pub fn ignored(preset: &Preset) -> Vec<String> {
             preset.start_pos_type
         ));
     }
+    if !is_zero_k(&preset.game_name) {
+        out.push(format!(
+            "That preset is for {}, not Zero-K. The game and its options are not kept -              a scenario runs Zero-K's mission script, and no other game has one.              The map and the teams still apply.",
+            preset.game_name.trim()
+        ));
+    }
     out
+}
+
+/// Does this name a Zero-K build?
+///
+/// Archive names carry a version - `Zero-K v1.14.8.0` - so this is a prefix
+/// test rather than an equality one. Empty counts as Zero-K: a preset that does
+/// not say means the one already in the scenario.
+fn is_zero_k(game: &str) -> bool {
+    let g = game.trim();
+    g.is_empty() || g.to_ascii_lowercase().starts_with("zero-k")
 }
 
 /// Lay a preset over a scenario, keeping everything the preset does not speak to.
@@ -236,18 +252,30 @@ pub fn ignored(preset: &Preset) -> Vec<String> {
 /// progress is meant to be a way to move it to another map and opponent.
 pub fn apply(preset: &Preset, scenario: &mut Scenario) {
     scenario.map = preset.map_name.clone();
-    if !preset.game_name.is_empty() {
-        scenario.game = preset.game_name.clone();
-    }
     let teams = teams_of(preset);
     if !teams.is_empty() {
         scenario.teams = teams;
     }
-    scenario.mod_options = preset
-        .mod_option_values
-        .iter()
-        .map(|(k, v)| (k.clone(), script_value(v)))
-        .collect();
+    /* The game and its modoptions are taken only from a Zero-K preset.
+       A scenario is a Zero-K mission - it needs
+       `mission_galaxy_campaign_battle.lua`, which no other game has - so
+       writing another game's name here produced a launch that started, ran a
+       plain skirmish, and placed none of the author's units or objectives, with
+       nothing in the log to say why. The shipped example preset is a
+       SplinterFaction one, so this is not hypothetical.
+
+       Modoptions go with it: they are keyed to whatever game defined them, and
+       another game's keys mean nothing to Zero-K. `ignored` says both. */
+    if is_zero_k(&preset.game_name) {
+        if !preset.game_name.is_empty() {
+            scenario.game = preset.game_name.clone();
+        }
+        scenario.mod_options = preset
+            .mod_option_values
+            .iter()
+            .map(|(k, v)| (k.clone(), script_value(v)))
+            .collect();
+    }
 }
 
 /// The battle half of a scenario, as a preset other tools can open.
@@ -427,6 +455,31 @@ mod tests {
 
     /// The preset published on Coilbox's own hub, fetched 2026-08-31 from
     /// `coilbox-hub.vercel.app/i/c6be936e-58ed-4daa-941e-800317876663`.
+    /// A Zero-K preset is still applied whole - the guard is about other games.
+    #[test]
+    fn a_zero_k_preset_still_brings_its_game_and_options() {
+        let preset = open(SHARED).unwrap();
+        let mut sc = crate::scenario::spsc_example().unwrap();
+        apply(&preset, &mut sc);
+        assert_eq!(sc.game, "Zero-K v1.14.8.0");
+        assert_eq!(sc.mod_options.get("startmetal").map(String::as_str), Some("1000"));
+        let why = ignored(&preset).join(" ");
+        assert!(!why.contains("not Zero-K"), "a Zero-K preset was refused: {why}");
+    }
+
+    /// The exported timestamp has to be a date the tools we share with can read.
+    #[test]
+    fn exported_timestamps_are_real_dates() {
+        // What went out before was `1970-01-01T00:00:00Z+<n>s`, which reads back
+        // as `Invalid Date` and breaks sorting wherever the preset lands.
+        assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339(86_399), "1970-01-01T23:59:59Z");
+        assert_eq!(rfc3339(86_400), "1970-01-02T00:00:00Z");
+        // A leap day, which is what the civil-from-days arithmetic is for.
+        assert_eq!(rfc3339(1_709_164_800), "2024-02-29T00:00:00Z");
+        assert_eq!(rfc3339(1_756_771_200), "2025-09-02T00:00:00Z");
+    }
+
     /// Asserting against the real thing rather than against a fixture written
     /// to match the code, which is the whole point of keeping one.
     const REAL: &str = include_str!("fixtures/coilbox-preset.json");
@@ -443,12 +496,25 @@ mod tests {
         assert!(to_json(&preset).unwrap().contains("SplinterFaction"));
 
         let mut sc = crate::scenario::spsc_example().unwrap();
+        let was_game = sc.game.clone();
         apply(&preset, &mut sc);
         assert_eq!(sc.map, "All That Simmers v1.1.1");
         // Four Lua AIs across two allyteams, and their names reach the script.
         assert_eq!(sc.teams.iter().filter(|t| t.ai.is_some()).count(), 4);
         assert!(sc.teams.iter().any(|t| t.ai.as_deref() == Some("SurvivalAI")));
-        assert_eq!(sc.mod_options.get("deathmode").map(String::as_str), Some("com"));
+
+        /* And the half that is not theirs to set. This preset is for
+           SplinterFaction; a scenario is a Zero-K mission and needs Zero-K's
+           `mission_galaxy_campaign_battle.lua`. Copied through, the launch
+           started a plain skirmish in another game and placed none of the
+           author's units or objectives, with nothing anywhere to say why. */
+        assert_eq!(sc.game, was_game, "another game's name reached the script");
+        assert_eq!(
+            sc.mod_options.get("deathmode"), None,
+            "another game's options came with it"
+        );
+        let why = ignored(&preset).join(" ");
+        assert!(why.contains("SplinterFaction"), "the editor never says so: {why}");
     }
 
     #[test]
@@ -544,6 +610,36 @@ pub fn spsc_import_preset(
     }))
 }
 
+/// Seconds since the epoch as an RFC 3339 instant in UTC.
+///
+/// What went out before was `1970-01-01T00:00:00Z+<n>s`, which is not a date in
+/// any format: the tools these presets are shared with call `new Date()` on it,
+/// get `Invalid Date`, and sort and display the import wrongly ever after. The
+/// civil-from-days arithmetic below is Howard Hinnant's, and is the whole
+/// reason no date crate is needed for one field.
+fn rfc3339(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+
+    // Shift the epoch to 0000-03-01 so a leap day lands at the end of a cycle.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
+}
+
 /// Write the battle half of this scenario out as a preset.
 #[tauri::command]
 pub fn spsc_export_preset(
@@ -563,9 +659,7 @@ pub fn spsc_export_preset(
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let id = format!("splaunch-{}-{stamp}", crate::campaign::slug(&scenario.name));
-    // RFC 3339 is what their timestamps look like; without a date library the
-    // honest thing is the epoch instant rather than a wrong-looking local date.
-    let now = format!("1970-01-01T00:00:00Z+{stamp}s");
+    let now = rfc3339(stamp);
     let json = to_json(&from_scenario(&scenario, &id, &now))?;
 
     let Some(path) = app
@@ -581,7 +675,6 @@ pub fn spsc_export_preset(
     let path = path
         .into_path()
         .map_err(|e| format!("that is not a path this can write to: {e}"))?;
-    std::fs::write(&path, json.as_bytes())
-        .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    crate::savefile::write(&path, json.as_bytes())?;
     Ok(Some(path.display().to_string()))
 }

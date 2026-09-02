@@ -1358,7 +1358,13 @@ return modinfo"#;
         use std::io::Write;
         let dir = std::env::temp_dir().join("splaunch-icon-test");
         let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join(format!("a{}.sdz", entries.len()));
+        /* Unique per call, not per entry count: two tests that happen to build
+           an archive with the same number of entries were writing over each
+           other's file, and cargo runs them at the same time. It failed
+           whichever way the scheduler went that day. */
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = dir.join(format!("a{n}.sdz"));
         let file = std::fs::File::create(&path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
         let opts = zip::write::SimpleFileOptions::default();

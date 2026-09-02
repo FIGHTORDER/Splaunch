@@ -222,12 +222,15 @@ pub fn sp_unit_marks(
 /// `None` rather than an error throughout: a map that is not installed, or one
 /// whose archive this cannot open, means the editor draws no metal - which is
 /// what it did before - not that the scenario is broken.
-#[tauri::command]
+/// `command(async)` because reading it is not cheap: a `.sd7` is one solid
+/// LZMA block, so reaching the `.smf` means inflating whatever sits before it -
+/// usually the tile file, which runs to hundreds of megabytes. On the main
+/// thread that is the webview frozen for seconds every time the map changes.
+#[tauri::command(async)]
 pub fn sp_map_metal(game: State<'_, Game>, map: String) -> Option<crate::mapfile::MetalMap> {
     let root = game.install_root()?;
     let archive = crate::mapfile::map_archive(&root, &map)?;
-    let smf = crate::mapfile::smf_bytes(&archive)?;
-    crate::mapfile::metal_map(&smf)
+    crate::mapfile::metal_for(&archive)
 }
 
 /// Start the engine on a script somebody else wrote.

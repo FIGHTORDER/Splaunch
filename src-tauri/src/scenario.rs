@@ -1860,8 +1860,7 @@ pub fn spsc_save(app: tauri::AppHandle, scenario: Scenario) -> Result<Option<Str
     let path = path
         .into_path()
         .map_err(|e| format!("that is not a path this can write to: {e}"))?;
-    std::fs::write(&path, to_json(&scenario)?)
-        .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    crate::savefile::write(&path, to_json(&scenario)?.as_bytes())?;
     Ok(Some(path.display().to_string()))
 }
 

@@ -209,24 +209,42 @@ fn base64url_decode(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// The most a share code may become once decompressed.
+///
+/// A preset is a few kilobytes of JSON. This is a thousand times that and still
+/// far below what a pasted string can be made to expand to: DEFLATE will turn a
+/// few megabytes of the right input into gigabytes, and this runs on whatever
+/// somebody pasted into the box.
+const MAX_INFLATED: u64 = 8 * 1024 * 1024;
+
 /// Raw DEFLATE, which is what upstream compresses a share code with.
 fn inflate(data: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Read;
+
+    let too_big = "that share code expands to far more than a preset can be";
     let mut out = Vec::new();
     // Try raw DEFLATE first, then zlib-wrapped, because which one a producer
     // used is not visible from the bytes and guessing wrong is a hard error
     // rather than a wrong answer.
     if flate2::read::DeflateDecoder::new(data)
+        .take(MAX_INFLATED + 1)
         .read_to_end(&mut out)
         .is_ok()
         && !out.is_empty()
     {
+        if out.len() as u64 > MAX_INFLATED {
+            return Err(too_big.into());
+        }
         return Ok(out);
     }
     out.clear();
     flate2::read::ZlibDecoder::new(data)
+        .take(MAX_INFLATED + 1)
         .read_to_end(&mut out)
         .map_err(|e| format!("that share code did not decompress: {e}"))?;
+    if out.len() as u64 > MAX_INFLATED {
+        return Err(too_big.into());
+    }
     Ok(out)
 }
 
