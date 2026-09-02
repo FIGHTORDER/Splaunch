@@ -26,6 +26,10 @@ on:
       - "package-lock.json"
       - "vite.config.js"
       - ".github/workflows/linux-release.yml"
+      # The version lives in release.yml and is read from it below. Without
+      # this, bumping the version alone publishes Windows assets at the new
+      # number and leaves Linux at the old one on the same release.
+      - ".github/workflows/release.yml"
 
 permissions:
   contents: write
