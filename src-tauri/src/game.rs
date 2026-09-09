@@ -412,17 +412,59 @@ pub fn game_archives(root: &Path) -> Vec<GameArchive> {
 
 /// The base game, as opposed to a mutator sitting beside it.
 ///
-/// Zero-K's own archive is the one whose name starts with "Zero-K"; a mission
-/// mutator is named after the mission. When nothing matches, the first archive
-/// is returned rather than none, because an install with exactly one game in it
-/// should not need the author to know this rule.
+/// See [`pick_base_game`] for the rule and for why "starts with Zero-K" was not
+/// enough.
 pub fn base_game(root: &Path) -> Option<GameArchive> {
-    let archives = game_archives(root);
+    pick_base_game(&game_archives(root))
+}
+
+/// Which of these archives is the game, rather than something built on it.
+///
+/// Zero-K's own archive is `Zero-K` followed by its version - `Zero-K
+/// v1.14.8.0` - because Spring appends a declared version to a declared name.
+/// A mutator is named after itself.
+///
+/// The rule used to be "starts with zero-k", which is true of the game and
+/// **also true of every mutator named after it**. `ZERO-K BIG BOYS` matched,
+/// sorted first, and became the default game on startup: reported as
+/// FIGHTORDER/Splaunch#1, where a scenario opened with a game nobody chose.
+///
+/// So what follows the name has to look like a version: `v1.14.8.0` does,
+/// `BIG BOYS` does not. Falling back in two steps after that, because being
+/// wrong about which Zero-K is better than having none at all:
+///
+/// 1. `Zero-K` and a version - the archive the engine ships.
+/// 2. Anything starting with `Zero-K`, for a version scheme not seen here.
+/// 3. The first archive, so an install with exactly one game in it works
+///    without the author knowing any of this.
+pub fn pick_base_game(archives: &[GameArchive]) -> Option<GameArchive> {
     archives
         .iter()
-        .find(|a| a.name.to_ascii_lowercase().starts_with("zero-k"))
+        .find(|a| is_versioned_zero_k(&a.name))
+        .or_else(|| archives.iter().find(|a| starts_with_zero_k(&a.name)))
         .or_else(|| archives.first())
         .cloned()
+}
+
+fn starts_with_zero_k(name: &str) -> bool {
+    name.to_ascii_lowercase().starts_with("zero-k")
+}
+
+/// `Zero-K` followed by something that reads as a version.
+///
+/// Deliberately not a version parser. The question is only whether what comes
+/// after the name is a version or more name, and a leading digit - with or
+/// without a `v` - answers it for every scheme Spring archives use.
+fn is_versioned_zero_k(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let Some(rest) = lower.strip_prefix("zero-k") else { return false };
+    let rest = rest.trim_start();
+    // `Zero-K` on its own is the game with no version declared.
+    if rest.is_empty() {
+        return true;
+    }
+    let rest = rest.strip_prefix('v').unwrap_or(rest);
+    rest.starts_with(|c: char| c.is_ascii_digit())
 }
 
 // ----------------------------------------------------------------- maps -----
@@ -1578,5 +1620,73 @@ return icontypes"#;
         let info = game_info(nowhere);
         assert!(info.engine.is_none());
         assert!(info.game.is_none());
+    }
+}
+
+#[cfg(test)]
+mod base_game_tests {
+    use super::*;
+
+    fn archive(name: &str) -> GameArchive {
+        GameArchive { name: name.into(), path: PathBuf::from("/x") }
+    }
+
+    #[test]
+    fn a_mutator_named_after_zero_k_is_not_zero_k() {
+        /* FIGHTORDER/Splaunch#1. `ZERO-K BIG BOYS` starts with "zero-k", so the
+           old rule matched it, and being first in the list made it the game
+           every scenario opened with. */
+        let got = pick_base_game(&[
+            archive("ZERO-K BIG BOYS"),
+            archive("Zero-K v1.14.8.0"),
+        ])
+        .expect("a game");
+        assert_eq!(got.name, "Zero-K v1.14.8.0");
+    }
+
+    #[test]
+    fn order_does_not_decide_it() {
+        // The mutator sorting after the game must not change the answer either.
+        let got = pick_base_game(&[
+            archive("Zero-K v1.14.8.0"),
+            archive("ZERO-K BIG BOYS"),
+        ])
+        .expect("a game");
+        assert_eq!(got.name, "Zero-K v1.14.8.0");
+    }
+
+    #[test]
+    fn the_other_mutators_beside_it_are_not_picked_either() {
+        /* Real names off a Zero-K install: these are what sits in `games/`
+           beside the base archive. */
+        let got = pick_base_game(&[
+            archive("Quick Rocket Tutorial"),
+            archive("ZERO-K BIG BOYS"),
+            archive("Super Extreme Kodachi Rally"),
+            archive("Zero-K v1.14.8.0"),
+        ])
+        .expect("a game");
+        assert_eq!(got.name, "Zero-K v1.14.8.0");
+    }
+
+    #[test]
+    fn a_version_scheme_we_have_not_seen_still_finds_zero_k() {
+        // Step two of the fallback: better a Zero-K we are unsure about than
+        // a racing mod.
+        let got = pick_base_game(&[archive("Zero-K"), archive("Some Mutator")]).expect("a game");
+        assert_eq!(got.name, "Zero-K");
+    }
+
+    #[test]
+    fn an_install_with_one_game_needs_no_rule_at_all() {
+        // Splaunch launches any Recoil game; an install holding only Balanced
+        // Annihilation should work without knowing about Zero-K.
+        let got = pick_base_game(&[archive("Balanced Annihilation V15.9.8")]).expect("a game");
+        assert_eq!(got.name, "Balanced Annihilation V15.9.8");
+    }
+
+    #[test]
+    fn nothing_installed_is_nothing_chosen() {
+        assert!(pick_base_game(&[]).is_none());
     }
 }
